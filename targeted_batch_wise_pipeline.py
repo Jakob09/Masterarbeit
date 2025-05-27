@@ -66,36 +66,25 @@ if __name__ == '__main__':
     data_loader = DataLoader(dataset, batch_size=32, shuffle=False)
 
     attack_to_epsilon = [{
-    fb_att.LinfProjectedGradientDescentAttack(): np.linspace(0, 0.05, num=5),
-    fb_att.LInfFMNAttack(): np.linspace(0, 0.5, num=20),
-    fb_att.L2FMNAttack(): np.linspace(0, 10, num=20),
-    fb_att.L1FMNAttack(): np.linspace(2, 250, num=20),
-    fb_att.LinearSearchBlendedUniformNoiseAttack(distance=LpDistance(100)): np.linspace(0, 20, num=20),                       # (very) perturbed images
+    #fb_att.LinfProjectedGradientDescentAttack(): np.linspace(0, 0.05, num=5),
+    #fb_att.LInfFMNAttack(): np.linspace(0, 0.5, num=20),
+    #fb_att.L2FMNAttack(): np.linspace(0, 10, num=20),
+    #fb_att.L1FMNAttack(): np.linspace(2, 500, num=20),
+    fb_att.L2DeepFoolAttack(): np.linspace(0, 100, num=20),
+
     },                                                         
     {
-    fb_att.SaltAndPepperNoiseAttack(): np.linspace(50, 400, num=20),
-    fb_att.GaussianBlurAttack(distance=LpDistance(2)): np.linspace(1, 200, num=20),
-    fb_att.LinfDeepFoolAttack(): np.linspace(0, 0.5, num=10),
-    fb_att.L2DeepFoolAttack(): np.linspace(0, 10, num=20),
-    fb_att.L2ProjectedGradientDescentAttack(): np.linspace(0.5, 10, num=10),
-    fb_att.LinfRepeatedAdditiveUniformNoiseAttack(): np.linspace(0.1, 5, num=20),   
-    fb_att.L2ClippingAwareRepeatedAdditiveUniformNoiseAttack(): np.linspace(1, 250, num=25),
+    #fb_att.GaussianBlurAttack(distance=LpDistance(2)): np.linspace(1, 200, num=20),
     },
     { 
-    fb_att.L2ClippingAwareRepeatedAdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=25),
-    fb_att.L2RepeatedAdditiveUniformNoiseAttack(): np.linspace(1, 250, num=25),
-    fb_att.L2RepeatedAdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=25),
-    fb_att.LinfAdditiveUniformNoiseAttack(): np.linspace(0, 2, num=30),
-    fb_att.LinfBasicIterativeAttack(): np.linspace(0, 0.1, num=15),
-    fb_att.EADAttack(steps=5000): np.linspace(1, 200, num=15),                                                               # very slow
-    fb_att.L2CarliniWagnerAttack(steps=1000): np.linspace(0, 10, num=10)
-    },
-    { fb_att.L2ClippingAwareAdditiveUniformNoiseAttack(): np.linspace(1, 250, num=20),
-    fb_att.L2ClippingAwareAdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=20),
-    fb_att.L2AdditiveUniformNoiseAttack(): np.linspace(1, 250, num=20),
-    fb_att.L2AdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=20),
-    fb_att.DDNAttack(): np.linspace(0, 10, num=20),
-    fb_att.L2BasicIterativeAttack(): np.linspace(0, 15, num=30),
+    fb_att.LinfDeepFoolAttack(): np.linspace(0, 5, num=10),
+    #fb_att.L2ProjectedGradientDescentAttack(): np.linspace(0.5, 10, num=10),
+    #fb_att.LinfBasicIterativeAttack(): np.linspace(0, 0.1, num=15),
+    #fb_att.L2CarliniWagnerAttack(steps=1000): np.linspace(0, 10, num=10)
+    }, 
+    {
+    #fb_att.DDNAttack(): np.linspace(0, 10, num=20),
+    #fb_att.L2BasicIterativeAttack(): np.linspace(0, 15, num=30),
     } ]
 
     explanation_methods = {"GradCAM": GradCAM, "HiResCAM": HiResCAM, "GradCAMElementWise": GradCAMElementWise, "GradCAMPlusPlus": GradCAMPlusPlus,
@@ -150,53 +139,4 @@ if __name__ == '__main__':
             plt.close()                       # Figure aus dem Speicher entfernen
 
 
-            # ------------------------------------------------------------
-            # 2. Index des größten Unterschieds finden
-            idx_max = torch.argmax(image_differences).item()
-
-            orig = batch_images[idx_max]        # Tensor (3, H, W)
-            adv  = adv_images[idx_max]          # Tensor (3, H, W)
-
-            # ------------------------------------------------------------
-            # 3. In darstellbares Format bringen
-            def to_numpy_img(t):
-                """
-                Erwartet Tensor (3, H, W) mit Werten 0–1 oder 0–255.
-                Gibt numpy-Array (H, W, 3) im Bereich 0–1 für Matplotlib zurück.
-                """
-                return t.detach().cpu().permute(1, 2, 0).clamp(0, 1).numpy()
-
-            orig_np = to_numpy_img(orig)
-            adv_np  = to_numpy_img(adv)
-
-            # ------------------------------------------------------------
-            # 4. Plot erstellen
-            plt.figure(figsize=(8, 4))
-
-            plt.subplot(1, 2, 1)
-            plt.imshow(orig_np)
-            plt.title("Original")
-            plt.axis("off")
-
-            plt.subplot(1, 2, 2)
-            plt.imshow(adv_np)
-            plt.title("Adversarial")
-            plt.axis("off")
-
-            plt.suptitle(f"Größter Unterschied – Index {idx_max} \nMSE = {image_differences[idx_max]:.4f}")
-            plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-
-            # ------------------------------------------------------------
-
-            filepath = f"results/targeted/largest_diff_idx{idx_max}" + str(attack)[0:20] + ".png"
-            plt.savefig(filepath, dpi=300)
-            plt.close()
-
-
-            del df, image_differences, batch_images, adv_images
-            gc.collect()
-            if device.type == 'cuda':
-                torch.cuda.empty_cache()
-
-            continue                # ONLY ADJUSTING ADVERSARIAL ATTACK HYPERPARAMETERS
         print(f"Failed to create adversarial in {num_adv_failed} cases. For attack: {attack}. \n")

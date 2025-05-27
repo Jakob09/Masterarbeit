@@ -24,6 +24,7 @@ from datasets import load_dataset # type: ignore
 import pandas as pd
 import seaborn as sns # type: ignore
 import matplotlib.pyplot as plt
+from skimage.metrics import structural_similarity
 
 '''
 tensor: Tensor of shape [C, H, W] normalized with given mean and std
@@ -238,6 +239,13 @@ def compute_iou(saliency_map_orig, saliency_map_adv, threshold_a=0.8, threshold_
 
     return intersection / union if union > 0 else 0.0
 
+def calculate_wasserstein_distance(saliency_map_orig, saliency_map_adv):
+    total = saliency_map_orig.sum()
+    saliency_map_orig = saliency_map_orig / total
+    total = saliency_map_adv.sum()
+    saliency_map_adv = saliency_map_adv / total
+    return scipy.stats.wasserstein_distance_nd(saliency_map_orig, saliency_map_adv)
+
 
 ''' function to calculate metrics to compare the original saliency map and the one for the adversarial.
 arguments: grayscale_cam_orig: pixel importances of original image,
@@ -344,6 +352,9 @@ def create_and_compare_explanations(images, labels, xAImethod, adversarials, csv
         ### saving metrics
         mean_pixel_diff, percent_different_pixels, cosine_sim, activation_ratio, highly_relevant_ratio, js_div, num_regions_orig, num_regions_adv, intersection_over_union = calculate_metrics(grayscale_cam_orig, grayscale_cam_adv)
 
+        ssim_value = structural_similarity(grayscale_cam_orig, grayscale_cam_adv)
+        earth_mover_distance = calculate_wasserstein_distance(grayscale_cam_orig, grayscale_cam_adv)
+
         # Write header if the file does not exist
         write_header = not os.path.exists(csv_file)
 
@@ -351,25 +362,30 @@ def create_and_compare_explanations(images, labels, xAImethod, adversarials, csv
             writer = csv.writer(file)
             if write_header:
                 writer.writerow([
-                    "idx", "method_name", "attack_name", "class_name", "target_pred", "images_mean_difference", "score_original", "score_adversarial",
+                    "image_id", "method_name", "attack_name", "class_name", "target_pred", "images_mean_difference", "score_original", "score_adversarial",
                     "mean_pixel_diff", "percent_different_pixels", "num_regions_orig", "num_regions_adv",
-                    "cosine_sim", "activation_ratio", "js_div", "highly_relevant_pixels_ratio", "intersection_over_union"
+                    "cosine_sim", "activation_ratio", "js_div", "highly_relevant_pixels_ratio", "intersection_over_union", "ssim", "earth_mover_distance"
                 ])
             writer.writerow([
                 id, method_name, attack_name, class_name, adv_pred_str, images_similarity, score, score_adv,
                 mean_pixel_diff, percent_different_pixels, num_regions_orig, num_regions_adv, cosine_sim, 
-                activation_ratio, js_div, highly_relevant_ratio, intersection_over_union
+                activation_ratio, js_div, highly_relevant_ratio, intersection_over_union, ssim_value, earth_mover_distance
             ])
     del grayscale_cam_adv, grayscale_cam_orig, grayscale_cams, batch
 
 
 ''' function to load images from imagenet subset and preprocess them
 returns: tensor of images and tensor of labels (class_ids)'''
-def load_and_transform_images(preprocess):
+def load_and_transform_images(preprocess, dataset_url="ioxil/imagenetsubset"):
     images = []
     labels = []
-    dataset = load_dataset("ioxil/imagenetsubset")
-    test_data = dataset["train"]
+
+    if dataset_url == "ioxil/imagenetsubset":
+        dataset = load_dataset("ioxil/imagenetsubset")
+        test_data = dataset["train"]
+    else:
+        dataset = load_dataset("Multimodal-Fatima/Imagenet1k_sample_validation")
+        test_data = dataset["validation"]
 
     for sample in test_data:
         image = sample["image"].convert("RGB")
@@ -504,7 +520,7 @@ if __name__ == '__main__':
     all_attacks = attack_to_epsilon[attack_group_index]
 
     # Define the path to the CSV file
-    csv_file = "results/NEW_cam_comparison_metrics" + str(attack_group_index) + ".csv"
+    csv_file = "results/cam_comparison_metrics" + str(attack_group_index) + ".csv"
 
     explanation_methods = {"GradCAM": GradCAM, "HiResCAM": HiResCAM, "GradCAMElementWise": GradCAMElementWise, "GradCAMPlusPlus": GradCAMPlusPlus,
                            "XGradCAM": XGradCAM, "EigenCAM": EigenCAM, "EigenGradCAM": EigenGradCAM, "LayerCAM": LayerCAM, 
@@ -538,89 +554,6 @@ if __name__ == '__main__':
             if adv_images is None:
                 continue
 
-            image_differences = ((batch_images - adv_images)**2).view(batch_images.size(0), -1).mean(dim=1)
-
-            # In DataFrame für bequeme Darstellung
-
-
-            df = pd.DataFrame({'mean_abs_difference': image_differences.cpu().numpy()})
-
-            plt.figure(figsize=(6, 4))
-            sns.boxplot(data=df, y='mean_abs_difference')
-            plt.title('Pixelweise mittlere |ΔRGB| pro Bild')
-            plt.ylabel('Durchschnittliche Absolutdifferenz')
-            plt.tight_layout()
-            plt.show()
-
-
-            file_path = "results/mse_boxplot_" + str(attack)[0:20] + ".png"
-            plt.savefig(file_path, dpi=300)   
-
-            plt.close()                       # Figure aus dem Speicher entfernen
-
-
-            # ------------------------------------------------------------
-            # 2. Index des größten Unterschieds finden
-            idx_max = torch.argmax(image_differences).item()
-
-            orig = batch_images[idx_max]        # Tensor (3, H, W)
-            adv  = adv_images[idx_max]          # Tensor (3, H, W)
-
-            # ------------------------------------------------------------
-            # 3. In darstellbares Format bringen
-            def to_numpy_img(t):
-                """
-                Erwartet Tensor (3, H, W) mit Werten 0–1 oder 0–255.
-                Gibt numpy-Array (H, W, 3) im Bereich 0–1 für Matplotlib zurück.
-                """
-                return t.detach().cpu().permute(1, 2, 0).clamp(0, 1).numpy()
-
-            orig_np = to_numpy_img(orig)
-            adv_np  = to_numpy_img(adv)
-
-            # ------------------------------------------------------------
-            # 4. Plot erstellen
-            plt.figure(figsize=(8, 4))
-
-            plt.subplot(1, 2, 1)
-            plt.imshow(orig_np)
-            plt.title("Original")
-            plt.axis("off")
-
-            plt.subplot(1, 2, 2)
-            plt.imshow(adv_np)
-            plt.title("Adversarial")
-            plt.axis("off")
-
-            plt.suptitle(f"Größter Unterschied – Index {idx_max} \nMSE = {image_differences[idx_max]:.4f}")
-            plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-
-            # ------------------------------------------------------------
-
-            filepath = f"results/largest_diff_idx{idx_max}" + str(attack)[0:20] + ".png"
-            plt.savefig(filepath, dpi=300)
-            plt.close()
-
-
-
-
-
-
-
-
-
-            del df, image_differences, batch_images, adv_images
-            gc.collect()
-            if device.type == 'cuda':
-                torch.cuda.empty_cache()
-
-
-
-
-
-
-
-            continue                # ONLY ADJUSTING ADVERSARIAL ATTACK HYPERPARAMETERS
 
             for xAImethod_name, xAImethod in explanation_methods.items():
                 print(f"Trying explanation method: {xAImethod}")
