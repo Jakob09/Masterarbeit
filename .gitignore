@@ -1,0 +1,55 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# VS Code settings
+.vscode/
+
+# PyTorch checkpoints / models
+*.pt
+*.pth
+
+# Environment files
+.env
+.venv/
+env/
+venv/
+ENV/
+*.env
+
+# Logs
+*.log
+
+# Data files
+*.csv
+*.tsv
+*.xls
+*.xlsx
+*.json
+*.db
+
+# Results folder
+results/
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+.DS_Store
+Thumbs.db
+
+# pip wheel build
+build/
+dist/
+*.egg-info/
+
+# pyright/mypy
+.pyright/
+.mypy_cache/
