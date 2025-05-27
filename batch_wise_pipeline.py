@@ -302,16 +302,15 @@ def create_untargeted_adversarials(image_batch, label_batch, attack, epsilons):
             print("No adversarial was produced.")
             selected_advs.append(None)
 
-    print(f"   GPU Mem In Adversarial Creation function: Alloc: {torch.cuda.memory_allocated(device)/(1024**2):.1f}MB, MaxAlloc: {torch.cuda.max_memory_allocated(device)/(1024**2):.1f}MB, Cached: {torch.cuda.memory_reserved(device)/(1024**2):.1f}MB")
-
     return selected_advs
 
 ''' function to run the explanation on the original image and compare the explanation for the adversarial with the original one
 saves generated plots (comparison of heatmaps) and stores metrics of comparison in csv file
 arguments: preprocessed images (Tensor of size [N, 3, 224, 224]), labels (Tensor of size [N] containing class_id),
 xAImethod: class from pytorch-gradcam, adversarials: Tensor of size [N, 3, 224, 224]'''
-def create_and_compare_explanations(images, labels, xAImethod, adversarials, csv_file, ids):
+def create_and_compare_explanations(model, images, labels, xAImethod, attack, adversarials, csv_file, ids):
     predictions = make_batch_predictions(model, images)
+    weights = ResNet50_Weights.DEFAULT
 
     target_layers = [model.layer4[-1]]
     targets = None
@@ -323,7 +322,6 @@ def create_and_compare_explanations(images, labels, xAImethod, adversarials, csv
     grayscale_cams = calculate_multiple_explanations(batch, target_layers, targets, model, xAImethod)
 
     number_of_images = images.shape[0]
-    print(f"   GPU Mem In Explanation Creation function: Alloc: {torch.cuda.memory_allocated(device)/(1024**2):.1f}MB, MaxAlloc: {torch.cuda.max_memory_allocated(device)/(1024**2):.1f}MB, Cached: {torch.cuda.memory_reserved(device)/(1024**2):.1f}MB")
 
     for i in range(number_of_images):
         image = images[i]
@@ -344,7 +342,7 @@ def create_and_compare_explanations(images, labels, xAImethod, adversarials, csv
         method_name = str(xAImethod).split(".")[-1].split("\'")[0]
         attack_name = str(attack).split("(")[0]
         class_name = weights.meta["categories"][labels[i]]
-        fig_to_save.savefig("results/images/NEW" + method_name + "_" + attack_name + "_" + class_name + str(id) + ".png")
+        fig_to_save.savefig("results/images/" + method_name + "_" + attack_name + "_" + class_name + str(id) + ".png")
         plt.close(fig_to_save)
         images_similarity = torch.mean((image - adv_image)**2).item()
         print(f"Difference of images: {images_similarity}")
@@ -352,7 +350,7 @@ def create_and_compare_explanations(images, labels, xAImethod, adversarials, csv
         ### saving metrics
         mean_pixel_diff, percent_different_pixels, cosine_sim, activation_ratio, highly_relevant_ratio, js_div, num_regions_orig, num_regions_adv, intersection_over_union = calculate_metrics(grayscale_cam_orig, grayscale_cam_adv)
 
-        ssim_value = structural_similarity(grayscale_cam_orig, grayscale_cam_adv)
+        ssim_value = structural_similarity(grayscale_cam_orig, grayscale_cam_adv, data_range=1)
         earth_mover_distance = calculate_wasserstein_distance(grayscale_cam_orig, grayscale_cam_adv)
 
         # Write header if the file does not exist
@@ -426,10 +424,10 @@ def filter_adversarial_fails(img_batch, label_batch, ids, adversarials):
         adversarials = None
     return img_batch, label_batch, ids, adversarials
 
-def create_explanations_micro_batch_wise(batch_images, batch_labels, xAImethod, adv_images, csv_file, batch_ids, micro_batch_size):
+def create_explanations_micro_batch_wise(model, batch_images, batch_labels, xAImethod, attack, adv_images, csv_file, batch_ids, micro_batch_size, device):
     for start in range(0, batch_images.shape[0], micro_batch_size):
                             end = start + micro_batch_size
-                            create_and_compare_explanations(batch_images[start:end], batch_labels[start:end], xAImethod, adv_images[start:end], csv_file, batch_ids[start:end])
+                            create_and_compare_explanations(model, batch_images[start:end], batch_labels[start:end], xAImethod, attack, adv_images[start:end], csv_file, batch_ids[start:end])
                             gc.collect()
                             if device.type == 'cuda':
                                 torch.cuda.empty_cache()
@@ -485,7 +483,8 @@ if __name__ == '__main__':
     fb_att.LinfinityBrendelBethgeAttack(steps=200): np.linspace(0, 0.5, num=10),
     },                                                         
 
-    {fb_att.L2BrendelBethgeAttack(steps=200): np.linspace(0, 5, num=20),
+    {
+    fb_att.L2BrendelBethgeAttack(steps=200): np.linspace(0, 5, num=20),
     fb_att.L1BrendelBethgeAttack(steps=200): np.linspace(2, 100, num=10),
     fb_att.LinearSearchBlendedUniformNoiseAttack(distance=LpDistance(100)): np.linspace(0, 20, num=20),                       # (very) perturbed images
     fb_att.SaltAndPepperNoiseAttack(): np.linspace(1, 250, num=20),
@@ -504,8 +503,8 @@ if __name__ == '__main__':
     fb_att.LinfBasicIterativeAttack(): np.linspace(0, 0.1, num=15),
     fb_att.BoundaryAttack(steps=10000): np.linspace(1, 150, num=10)                              # very slow
     },
-
-    { fb_att.L2ClippingAwareAdditiveUniformNoiseAttack(): np.linspace(1, 250, num=20),
+    { 
+    fb_att.L2ClippingAwareAdditiveUniformNoiseAttack(): np.linspace(1, 250, num=20),
     fb_att.L2ClippingAwareAdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=20),
     fb_att.L2AdditiveUniformNoiseAttack(): np.linspace(1, 250, num=20),
     fb_att.L2AdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=20),
@@ -526,8 +525,6 @@ if __name__ == '__main__':
                            "XGradCAM": XGradCAM, "EigenCAM": EigenCAM, "EigenGradCAM": EigenGradCAM, "LayerCAM": LayerCAM, 
                            "KPCA_CAM": KPCA_CAM, "AblationCAM": AblationCAM, "FullGrad": FullGrad, "ScoreCAM": ScoreCAM}
 
-    # ScoreCAM: 2
-    # FullGrad: 8
 
     for attack, epsilons in all_attacks.items():
         num_adv_failed = 0
@@ -559,13 +556,13 @@ if __name__ == '__main__':
                 print(f"Trying explanation method: {xAImethod}")
                 if xAImethod_name == "FullGrad":
                     micro_batch_size = 8
-                    create_explanations_micro_batch_wise(batch_images, batch_labels, xAImethod, adv_images, csv_file, batch_ids, micro_batch_size)
+                    create_explanations_micro_batch_wise(model, batch_images, batch_labels, xAImethod, attack, adv_images, csv_file, batch_ids, micro_batch_size, device)
                 elif xAImethod_name == "ScoreCAM":
                     micro_batch_size = 2
-                    create_explanations_micro_batch_wise(batch_images, batch_labels, xAImethod, adv_images, csv_file, batch_ids, micro_batch_size)
+                    create_explanations_micro_batch_wise(model, batch_images, batch_labels, xAImethod, attack, adv_images, csv_file, batch_ids, micro_batch_size, device)
                 else:
                     micro_batch_size = 64
-                    create_explanations_micro_batch_wise(batch_images, batch_labels, xAImethod, adv_images, csv_file, batch_ids, micro_batch_size)
+                    create_explanations_micro_batch_wise(model, batch_images, batch_labels, xAImethod, attack, adv_images, csv_file, batch_ids, micro_batch_size, device)
 
             #print(f"  GPU Mem (After Image {batch_ids[-1].item()} Proc.): Alloc: {torch.cuda.memory_allocated(device)/(1024**2):.1f}MB, MaxAlloc: {torch.cuda.max_memory_allocated(device)/(1024**2):.1f}MB, Cached: {torch.cuda.memory_reserved(device)/(1024**2):.1f}MB")
         print(f"Failed to create adversarial in {num_adv_failed} cases. For attack: {attack}. \n")

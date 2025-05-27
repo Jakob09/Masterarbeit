@@ -13,9 +13,9 @@ def create_targeted_adversarials(image_batch, label_batch, attack, epsilons):
     raw, clipped, is_adv = attack(fmodel, image_batch, criterion, epsilons=epsilons)                      # clipped: list of tensors of size [N, 3, 224, 224] -> index of list corresponds to epsilon
                                                                                                             # different images might have different best epsilons
     selected_advs = []
-    K, N = is_adv.shape                         # K = #epsilons, N = #images
+    K, N = is_adv.shape                             # K = #epsilons, N = #images
 
-    for i in range(N):                  # for each image in batch
+    for i in range(N):                              # for each image in batch
         success = is_adv[:, i]
         indices = torch.nonzero(success, as_tuple=False)
         if indices.numel() > 0:
@@ -58,33 +58,29 @@ if __name__ == '__main__':
     
     fmodel = fb.PyTorchModel(model, bounds=bounds, preprocessing=None)
 
-    images, labels = load_and_transform_images(preprocess)
-    images = images[0:64]
-    labels = labels[0:64]
+    images, labels = load_and_transform_images(preprocess, dataset_url="Multimodal-Fatima/Imagenet1k_sample_validation")
+    images = images[0:5]
+    labels = labels[0:5]
     ids = torch.arange(len(images))
     dataset = TensorDataset(images, labels, ids)
     data_loader = DataLoader(dataset, batch_size=32, shuffle=False)
 
     attack_to_epsilon = [{
-    #fb_att.LinfProjectedGradientDescentAttack(): np.linspace(0, 0.05, num=5),
-    #fb_att.LInfFMNAttack(): np.linspace(0, 0.5, num=20),
-    #fb_att.L2FMNAttack(): np.linspace(0, 10, num=20),
-    #fb_att.L1FMNAttack(): np.linspace(2, 500, num=20),
-    fb_att.L2DeepFoolAttack(): np.linspace(0, 100, num=20),
-
+    fb_att.L2ProjectedGradientDescentAttack(): np.linspace(0.5, 10, num=5),
+    fb_att.L2FMNAttack(): np.linspace(0, 10, num=20),
+    fb_att.L1FMNAttack(): np.linspace(2, 500, num=20),
     },                                                         
     {
-    #fb_att.GaussianBlurAttack(distance=LpDistance(2)): np.linspace(1, 200, num=20),
+    fb_att.LinfProjectedGradientDescentAttack(): np.linspace(0, 0.05, num=5),
+    fb_att.LInfFMNAttack(): np.linspace(0, 0.5, num=20),
     },
     { 
-    fb_att.LinfDeepFoolAttack(): np.linspace(0, 5, num=10),
-    #fb_att.L2ProjectedGradientDescentAttack(): np.linspace(0.5, 10, num=10),
-    #fb_att.LinfBasicIterativeAttack(): np.linspace(0, 0.1, num=15),
-    #fb_att.L2CarliniWagnerAttack(steps=1000): np.linspace(0, 10, num=10)
+    fb_att.LinfBasicIterativeAttack(): np.linspace(0, 0.1, num=15),
+    fb_att.L2CarliniWagnerAttack(steps=1000): np.linspace(0, 10, num=10)
     }, 
     {
-    #fb_att.DDNAttack(): np.linspace(0, 10, num=20),
-    #fb_att.L2BasicIterativeAttack(): np.linspace(0, 15, num=30),
+    fb_att.DDNAttack(): np.linspace(0, 10, num=20),
+    fb_att.L2BasicIterativeAttack(): np.linspace(0, 15, num=30),
     } ]
 
     explanation_methods = {"GradCAM": GradCAM, "HiResCAM": HiResCAM, "GradCAMElementWise": GradCAMElementWise, "GradCAMPlusPlus": GradCAMPlusPlus,
@@ -118,25 +114,17 @@ if __name__ == '__main__':
             if adv_images is None:
                 continue
 
-            image_differences = ((batch_images - adv_images)**2).view(batch_images.size(0), -1).mean(dim=1)
-
-            # In DataFrame für bequeme Darstellung
-
-
-            df = pd.DataFrame({'mean_abs_difference': image_differences.cpu().numpy()})
-
-            plt.figure(figsize=(6, 4))
-            sns.boxplot(data=df, y='mean_abs_difference')
-            plt.title('Pixelweise mittlere |ΔRGB| pro Bild')
-            plt.ylabel('Durchschnittliche Absolutdifferenz')
-            plt.tight_layout()
-            plt.show()
-
-
-            file_path = "results/targeted/mse_boxplot_" + str(attack)[0:20] + ".png"
-            plt.savefig(file_path, dpi=300)   
-
-            plt.close()                       # Figure aus dem Speicher entfernen
+            for xAImethod_name, xAImethod in explanation_methods.items():
+                print(f"Trying explanation method: {xAImethod}")
+                if xAImethod_name == "FullGrad":
+                    micro_batch_size = 8
+                    create_explanations_micro_batch_wise(model, batch_images, batch_labels, xAImethod, attack, adv_images, csv_file, batch_ids, micro_batch_size, device)
+                elif xAImethod_name == "ScoreCAM":
+                    micro_batch_size = 2
+                    create_explanations_micro_batch_wise(model, batch_images, batch_labels, xAImethod, attack, adv_images, csv_file, batch_ids, micro_batch_size, device)
+                else:
+                    micro_batch_size = 64
+                    create_explanations_micro_batch_wise(model, batch_images, batch_labels, xAImethod, attack, adv_images, csv_file, batch_ids, micro_batch_size, device)
 
 
         print(f"Failed to create adversarial in {num_adv_failed} cases. For attack: {attack}. \n")
