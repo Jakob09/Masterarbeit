@@ -382,10 +382,12 @@ def load_and_transform_images(preprocess):
 
 
 def setup_result_folders():
-        # Setup Folders
+    # Setup Folders
     results_folder = 'results'
     images_folder = os.path.join(results_folder, 'images')
+    targeted_folder = os.path.join(results_folder, "targeted")
     os.makedirs(images_folder, exist_ok=True)
+    os.makedirs(targeted_folder, exist_ok=True)
     print(f"Results will be saved in: {results_folder}")
 
 def filter_wrong_classifications(img_batch, label_batch, ids, predictions):

@@ -66,10 +66,10 @@ if __name__ == '__main__':
     data_loader = DataLoader(dataset, batch_size=32, shuffle=False)
 
     attack_to_epsilon = [{
-    #fb_att.LinfProjectedGradientDescentAttack(): np.linspace(0, 0.05, num=5),
-    #fb_att.LInfFMNAttack(): np.linspace(0, 0.5, num=20),
-    #fb_att.L2FMNAttack(): np.linspace(0, 10, num=20),
-    #fb_att.L1FMNAttack(): np.linspace(2, 250, num=20),
+    fb_att.LinfProjectedGradientDescentAttack(): np.linspace(0, 0.05, num=5),
+    fb_att.LInfFMNAttack(): np.linspace(0, 0.5, num=20),
+    fb_att.L2FMNAttack(): np.linspace(0, 10, num=20),
+    fb_att.L1FMNAttack(): np.linspace(2, 250, num=20),
     fb_att.LinearSearchBlendedUniformNoiseAttack(distance=LpDistance(100)): np.linspace(0, 20, num=20),                       # (very) perturbed images
     },                                                         
     {
@@ -103,7 +103,7 @@ if __name__ == '__main__':
                            "KPCA_CAM": KPCA_CAM, "AblationCAM": AblationCAM, "FullGrad": FullGrad, "ScoreCAM": ScoreCAM}
     
     all_attacks = attack_to_epsilon[attack_group_index]
-    csv_file = "results/targeted/NEW_cam_comparison_metrics" + str(attack_group_index) + ".csv"
+    csv_file = "results/targeted/cam_comparison_metrics" + str(attack_group_index) + ".csv"
     for attack, epsilons in all_attacks.items():
         num_adv_failed = 0
         print(f"Doing attack: {attack}")
@@ -126,7 +126,8 @@ if __name__ == '__main__':
 
             batch_images, batch_labels, batch_ids, adv_images = filter_adversarial_fails(batch_images, batch_labels, batch_ids, adv_images)
             print(batch_labels)
-
+            if adv_images is None:
+                continue
 
             image_differences = ((batch_images - adv_images)**2).view(batch_images.size(0), -1).mean(dim=1)
 
