@@ -59,8 +59,8 @@ if __name__ == '__main__':
     fmodel = fb.PyTorchModel(model, bounds=bounds, preprocessing=None)
 
     images, labels = load_and_transform_images(preprocess, dataset_url="Multimodal-Fatima/Imagenet1k_sample_validation")
-    images = images[0:5]
-    labels = labels[0:5]
+    images = images[0:200]
+    labels = labels[0:200]
     ids = torch.arange(len(images))
     dataset = TensorDataset(images, labels, ids)
     data_loader = DataLoader(dataset, batch_size=32, shuffle=False)
@@ -83,10 +83,12 @@ if __name__ == '__main__':
     fb_att.L2BasicIterativeAttack(): np.linspace(0, 15, num=30),
     } ]
 
-    explanation_methods = {"GradCAM": GradCAM, "HiResCAM": HiResCAM, "GradCAMElementWise": GradCAMElementWise, "GradCAMPlusPlus": GradCAMPlusPlus,
-                           "XGradCAM": XGradCAM, "EigenCAM": EigenCAM, "EigenGradCAM": EigenGradCAM, "LayerCAM": LayerCAM, 
-                           "KPCA_CAM": KPCA_CAM, "AblationCAM": AblationCAM, "FullGrad": FullGrad, "ScoreCAM": ScoreCAM}
+    explanation_methods = {"GradCAM": GradCAM,  "GradCAMPlusPlus": GradCAMPlusPlus, "EigenCAM": EigenCAM, 
+                           "EigenGradCAM": EigenGradCAM, "LayerCAM": LayerCAM, "KPCA_CAM": KPCA_CAM, 
+                           "AblationCAM": AblationCAM, "FullGrad": FullGrad, "ScoreCAM": ScoreCAM}
     
+
+    # give exact same saliency maps: "HiResCAM": HiResCAM, "GradCAMElementWise": GradCAMElementWise, "XGradCAM": XGradCAM
     all_attacks = attack_to_epsilon[attack_group_index]
     csv_file = "results/targeted/cam_comparison_metrics" + str(attack_group_index) + ".csv"
     for attack, epsilons in all_attacks.items():

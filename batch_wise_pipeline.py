@@ -25,6 +25,7 @@ import pandas as pd
 import seaborn as sns # type: ignore
 import matplotlib.pyplot as plt
 from skimage.metrics import structural_similarity
+from random import randrange
 
 '''
 tensor: Tensor of shape [C, H, W] normalized with given mean and std
@@ -239,13 +240,18 @@ def compute_iou(saliency_map_orig, saliency_map_adv, threshold_a=0.8, threshold_
 
     return intersection / union if union > 0 else 0.0
 
-def calculate_wasserstein_distance(saliency_map_orig, saliency_map_adv):
-    total = saliency_map_orig.sum()
-    saliency_map_orig = saliency_map_orig / total
-    total = saliency_map_adv.sum()
-    saliency_map_adv = saliency_map_adv / total
-    return scipy.stats.wasserstein_distance_nd(saliency_map_orig, saliency_map_adv)
+def calculate_spearman_rank_correlation(saliency_map_orig, saliency_map_adv):
 
+    # 1. Flatten the maps
+    original_flat = saliency_map_orig.flatten()
+    adversarial_flat = saliency_map_adv.flatten()
+
+    # 2. Calculate Spearman's rank correlation
+    correlation_coefficient, p_value = scipy.stats.spearmanr(original_flat, adversarial_flat)
+
+    print(f"Spearman's Rank Correlation Coefficient: {correlation_coefficient:.4f}")
+
+    return correlation_coefficient
 
 ''' function to calculate metrics to compare the original saliency map and the one for the adversarial.
 arguments: grayscale_cam_orig: pixel importances of original image,
@@ -336,14 +342,16 @@ def create_and_compare_explanations(model, images, labels, xAImethod, attack, ad
         adv_image_np = adv_image.permute(1, 2, 0).cpu().numpy()
         grayscale_cam_orig = grayscale_cams[i, :]
         grayscale_cam_adv = grayscale_cams[(i + number_of_images), :]
-        fig_to_save = compare_visualizations(image_np, grayscale_cam_orig, orig_pred_str, adv_image_np, grayscale_cam_adv, adv_pred_str, xAImethod)
 
         ### saving figure
         method_name = str(xAImethod).split(".")[-1].split("\'")[0]
         attack_name = str(attack).split("(")[0]
         class_name = weights.meta["categories"][labels[i]]
-        fig_to_save.savefig("results/images/" + method_name + "_" + attack_name + "_" + class_name + str(id) + ".png")
-        plt.close(fig_to_save)
+
+        #if randrange(20) == 1:
+        #    fig_to_save = compare_visualizations(image_np, grayscale_cam_orig, orig_pred_str, adv_image_np, grayscale_cam_adv, adv_pred_str, xAImethod)
+        #    fig_to_save.savefig("results/images/" + method_name + "_" + attack_name + "_" + class_name + str(id) + ".png")
+        #    plt.close(fig_to_save)
         images_similarity = torch.mean((image - adv_image)**2).item()
         print(f"Difference of images: {images_similarity}")
 
@@ -351,7 +359,7 @@ def create_and_compare_explanations(model, images, labels, xAImethod, attack, ad
         mean_pixel_diff, percent_different_pixels, cosine_sim, activation_ratio, highly_relevant_ratio, js_div, num_regions_orig, num_regions_adv, intersection_over_union = calculate_metrics(grayscale_cam_orig, grayscale_cam_adv)
 
         ssim_value = structural_similarity(grayscale_cam_orig, grayscale_cam_adv, data_range=1)
-        earth_mover_distance = calculate_wasserstein_distance(grayscale_cam_orig, grayscale_cam_adv)
+        spearman_rank_coeff = calculate_spearman_rank_correlation(grayscale_cam_orig, grayscale_cam_adv)
 
         # Write header if the file does not exist
         write_header = not os.path.exists(csv_file)
@@ -362,12 +370,12 @@ def create_and_compare_explanations(model, images, labels, xAImethod, attack, ad
                 writer.writerow([
                     "image_id", "method_name", "attack_name", "class_name", "target_pred", "images_mean_difference", "score_original", "score_adversarial",
                     "mean_pixel_diff", "percent_different_pixels", "num_regions_orig", "num_regions_adv",
-                    "cosine_sim", "activation_ratio", "js_div", "highly_relevant_pixels_ratio", "intersection_over_union", "ssim", "earth_mover_distance"
+                    "cosine_sim", "activation_ratio", "js_div", "highly_relevant_pixels_ratio", "intersection_over_union", "ssim", "spearman_rank_coeff"
                 ])
             writer.writerow([
                 id, method_name, attack_name, class_name, adv_pred_str, images_similarity, score, score_adv,
                 mean_pixel_diff, percent_different_pixels, num_regions_orig, num_regions_adv, cosine_sim, 
-                activation_ratio, js_div, highly_relevant_ratio, intersection_over_union, ssim_value, earth_mover_distance
+                activation_ratio, js_div, highly_relevant_ratio, intersection_over_union, ssim_value, spearman_rank_coeff
             ])
     del grayscale_cam_adv, grayscale_cam_orig, grayscale_cams, batch
 
@@ -521,10 +529,10 @@ if __name__ == '__main__':
     # Define the path to the CSV file
     csv_file = "results/cam_comparison_metrics" + str(attack_group_index) + ".csv"
 
-    explanation_methods = {"GradCAM": GradCAM, "HiResCAM": HiResCAM, "GradCAMElementWise": GradCAMElementWise, "GradCAMPlusPlus": GradCAMPlusPlus,
-                           "XGradCAM": XGradCAM, "EigenCAM": EigenCAM, "EigenGradCAM": EigenGradCAM, "LayerCAM": LayerCAM, 
-                           "KPCA_CAM": KPCA_CAM, "AblationCAM": AblationCAM, "FullGrad": FullGrad, "ScoreCAM": ScoreCAM}
-
+    explanation_methods = {"GradCAM": GradCAM,  "GradCAMPlusPlus": GradCAMPlusPlus, "EigenCAM": EigenCAM, 
+                           "EigenGradCAM": EigenGradCAM, "LayerCAM": LayerCAM, "KPCA_CAM": KPCA_CAM, 
+                           "AblationCAM": AblationCAM, "FullGrad": FullGrad, "ScoreCAM": ScoreCAM}
+    # give exact same saliency maps: "HiResCAM": HiResCAM, "GradCAMElementWise": GradCAMElementWise, "XGradCAM": XGradCAM
 
     for attack, epsilons in all_attacks.items():
         num_adv_failed = 0
