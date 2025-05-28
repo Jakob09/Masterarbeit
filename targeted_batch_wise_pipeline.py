@@ -6,8 +6,13 @@ arguments: batch of preprocessed images (Tensor of size [N, 3, 224, 224]), label
 attack: Class from foolbox.attacks, epsilons: numpy array of epsilons to try for that attack
 returns: selected_advs: adversarial images (Tensor of size [N, 3, 224, 224]) (None if no adversarial was produced)'''
 def create_targeted_adversarials(image_batch, label_batch, attack, epsilons):
-
-    target_labels = (label_batch + 300) % 1000
+    with torch.no_grad():
+            outputs = model(image_batch)
+            probs = torch.softmax(outputs, dim=1)
+            lowest_scores, lowest_classes = probs.min(dim=1)
+   
+    #target_labels = (label_batch + 300) % 1000
+    target_labels = lowest_classes
     criterion = fb.criteria.TargetedMisclassification(target_labels)
 
     raw, clipped, is_adv = attack(fmodel, image_batch, criterion, epsilons=epsilons)                      # clipped: list of tensors of size [N, 3, 224, 224] -> index of list corresponds to epsilon
@@ -59,8 +64,7 @@ if __name__ == '__main__':
     fmodel = fb.PyTorchModel(model, bounds=bounds, preprocessing=None)
 
     images, labels = load_and_transform_images(preprocess, dataset_url="Multimodal-Fatima/Imagenet1k_sample_validation")
-    images = images[0:200]
-    labels = labels[0:200]
+
     ids = torch.arange(len(images))
     dataset = TensorDataset(images, labels, ids)
     data_loader = DataLoader(dataset, batch_size=32, shuffle=False)
@@ -90,7 +94,7 @@ if __name__ == '__main__':
 
     # give exact same saliency maps: "HiResCAM": HiResCAM, "GradCAMElementWise": GradCAMElementWise, "XGradCAM": XGradCAM
     all_attacks = attack_to_epsilon[attack_group_index]
-    csv_file = "results/targeted/cam_comparison_metrics" + str(attack_group_index) + ".csv"
+    csv_file = "results/targeted/cam_comparison_metrics_targeted" + str(attack_group_index) + ".csv"
     for attack, epsilons in all_attacks.items():
         num_adv_failed = 0
         print(f"Doing attack: {attack}")
