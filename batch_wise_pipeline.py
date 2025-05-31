@@ -453,7 +453,7 @@ if __name__ == '__main__':
     print(f"Running pipeline with index: {attack_group_index}")
     setup_result_folders()
 
-    
+
     # Use GPU if available
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
@@ -468,60 +468,53 @@ if __name__ == '__main__':
     
     fmodel = fb.PyTorchModel(model, bounds=bounds, preprocessing=None)
 
-    images, labels = load_and_transform_images(preprocess)
-    images = images[0:64]
-    labels = labels[0:64]
+    images, labels = load_and_transform_images(preprocess, dataset_url="Multimodal-Fatima/Imagenet1k_sample_validation")
+
     ids = torch.arange(len(images))
     dataset = TensorDataset(images, labels, ids)
     data_loader = DataLoader(dataset, batch_size=32, shuffle=False)
-
-
-    #print(fb.utils.accuracy(fmodel, images, labels))
-
-    print(labels.unique(return_counts=True))
                    
     attack_to_epsilon = [{
     fb_att.LinfFastGradientAttack(): np.linspace(0, 1, num=20),
     fb_att.LinfProjectedGradientDescentAttack(): np.linspace(0, 0.05, num=5),
     fb_att.L2FastGradientAttack(): np.linspace(1, 150, num=20),
-    fb_att.L2ProjectedGradientDescentAttack(): np.linspace(0.5, 10, num=10),
-    fb_att.LInfFMNAttack(): np.linspace(0, 0.5, num=20),
-    fb_att.L2FMNAttack(): np.linspace(0, 10, num=20),
-    fb_att.L1FMNAttack(): np.linspace(2, 150, num=20),
-    fb_att.LinfinityBrendelBethgeAttack(steps=200): np.linspace(0, 0.5, num=10),
+    fb_att.L2ProjectedGradientDescentAttack(): np.linspace(0.5, 10, num=5),
+    # fb_att.LInfFMNAttack(): np.linspace(0, 0.5, num=20),
+    # fb_att.L2FMNAttack(): np.linspace(0, 10, num=20),
+    # fb_att.L1FMNAttack(): np.linspace(2, 150, num=20),
+    # fb_att.LinfinityBrendelBethgeAttack(steps=200): np.linspace(0, 0.5, num=10),
     },                                                         
-
     {
+    fb_att.L2RepeatedAdditiveUniformNoiseAttack(): np.linspace(1, 250, num=25),
+    fb_att.L2RepeatedAdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=25),
     fb_att.L2BrendelBethgeAttack(steps=200): np.linspace(0, 5, num=20),
-    fb_att.L1BrendelBethgeAttack(steps=200): np.linspace(2, 100, num=10),
     fb_att.LinearSearchBlendedUniformNoiseAttack(distance=LpDistance(100)): np.linspace(0, 20, num=20),                       # (very) perturbed images
     fb_att.SaltAndPepperNoiseAttack(): np.linspace(1, 250, num=20),
-    fb_att.LinfDeepFoolAttack(): np.linspace(0, 0.5, num=10),
-    fb_att.L2DeepFoolAttack(): np.linspace(0, 10, num=20),
-    fb_att.GaussianBlurAttack(distance=LpDistance(2)): np.linspace(1, 200, num=20)
+    # fb_att.LinfDeepFoolAttack(): np.linspace(0, 0.5, num=10),
+    # fb_att.L2DeepFoolAttack(): np.linspace(0, 10, num=20),
+    # fb_att.GaussianBlurAttack(distance=LpDistance(2)): np.linspace(1, 200, num=20),
+    # fb_att.L2ClippingAwareAdditiveUniformNoiseAttack(): np.linspace(1, 250, num=20),
     },
-
     { 
     fb_att.LinfRepeatedAdditiveUniformNoiseAttack(): np.linspace(0.1, 5, num=20),   
     fb_att.L2ClippingAwareRepeatedAdditiveUniformNoiseAttack(): np.linspace(1, 250, num=25),
-    fb_att.L2ClippingAwareRepeatedAdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=25),
-    fb_att.L2RepeatedAdditiveUniformNoiseAttack(): np.linspace(1, 250, num=25),
-    fb_att.L2RepeatedAdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=25),
+    fb_att.L1BrendelBethgeAttack(steps=200): np.linspace(2, 100, num=10),
     fb_att.LinfAdditiveUniformNoiseAttack(): np.linspace(0, 2, num=30),
-    fb_att.LinfBasicIterativeAttack(): np.linspace(0, 0.1, num=15),
-    fb_att.BoundaryAttack(steps=10000): np.linspace(1, 150, num=10)                              # very slow
+    # fb_att.LinfBasicIterativeAttack(): np.linspace(0, 0.1, num=15),
+    # fb_att.BoundaryAttack(steps=10000): np.linspace(1, 150, num=10),                              # very slow
+    # fb_att.L2ClippingAwareRepeatedAdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=25),
+
     },
     { 
-    fb_att.L2ClippingAwareAdditiveUniformNoiseAttack(): np.linspace(1, 250, num=20),
     fb_att.L2ClippingAwareAdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=20),
     fb_att.L2AdditiveUniformNoiseAttack(): np.linspace(1, 250, num=20),
-    fb_att.L2AdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=20),
     fb_att.VirtualAdversarialAttack(steps=100): np.linspace(10, 150, num=50),
     fb_att.DDNAttack(): np.linspace(0, 10, num=20),
     fb_att.L2BasicIterativeAttack(): np.linspace(0, 15, num=30),
-    fb_att.EADAttack(steps=5000): np.linspace(1, 200, num=15),                                                               # very slow
-    fb_att.NewtonFoolAttack(): np.linspace(0, 50, num=20),
-    fb_att.L2CarliniWagnerAttack(steps=1000): np.linspace(0, 10, num=10)
+    # fb_att.EADAttack(steps=5000): np.linspace(1, 200, num=15),
+    # fb_att.L2AdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=20),
+    # fb_att.NewtonFoolAttack(): np.linspace(0, 50, num=20),
+    # fb_att.L2CarliniWagnerAttack(steps=1000): np.linspace(0, 10, num=10)
     } ]
 
     all_attacks = attack_to_epsilon[attack_group_index]
@@ -532,7 +525,7 @@ if __name__ == '__main__':
     explanation_methods = {"GradCAM": GradCAM,  "GradCAMPlusPlus": GradCAMPlusPlus, "EigenCAM": EigenCAM, 
                            "EigenGradCAM": EigenGradCAM, "LayerCAM": LayerCAM, "KPCA_CAM": KPCA_CAM, 
                            "AblationCAM": AblationCAM, "FullGrad": FullGrad, "ScoreCAM": ScoreCAM}
-    # give exact same saliency maps: "HiResCAM": HiResCAM, "GradCAMElementWise": GradCAMElementWise, "XGradCAM": XGradCAM
+    # give exact same saliency maps: [GradCAM, HiResCAM, XGradCAM], [LayerCAM, GradCAMElementwise]
 
     for attack, epsilons in all_attacks.items():
         num_adv_failed = 0
@@ -555,10 +548,8 @@ if __name__ == '__main__':
             num_adv_failed += num_none
 
             batch_images, batch_labels, batch_ids, adv_images = filter_adversarial_fails(batch_images, batch_labels, batch_ids, adv_images)
-            print(batch_labels)
             if adv_images is None:
                 continue
-
 
             for xAImethod_name, xAImethod in explanation_methods.items():
                 print(f"Trying explanation method: {xAImethod}")
