@@ -287,9 +287,6 @@ arguments: batch of preprocessed images (Tensor of size [N, 3, 224, 224]), label
 attack: Class from foolbox.attacks, epsilons: numpy array of epsilons to try for that attack
 returns: selected_advs: adversarial images (Tensor of size [N, 3, 224, 224]) (None if no adversarial was produced)'''
 def create_untargeted_adversarials(image_batch, label_batch, attack, epsilons):
-    # TODO: Targeted Attack if possible (not supported by all attacks)
-    #target_labels = torch.tensor(400).unsqueeze(0)
-    #criterion = fb.criteria.TargetedMisclassification(target_labels)
 
     raw, clipped, is_adv = attack(fmodel, image_batch, label_batch, epsilons=epsilons)                      # clipped: list of tensors of size [N, 3, 224, 224] -> index of list corresponds to epsilon
                                                                                                             # different images might have different best epsilons
@@ -475,46 +472,46 @@ if __name__ == '__main__':
     data_loader = DataLoader(dataset, batch_size=32, shuffle=False)
                    
     attack_to_epsilon = [{
-    fb_att.LinfFastGradientAttack(): np.linspace(0, 1, num=20),
-    fb_att.LinfProjectedGradientDescentAttack(): np.linspace(0, 0.05, num=5),
-    fb_att.L2FastGradientAttack(): np.linspace(1, 150, num=20),
-    fb_att.L2ProjectedGradientDescentAttack(): np.linspace(0.5, 10, num=5),
-    # fb_att.LInfFMNAttack(): np.linspace(0, 0.5, num=20),
-    # fb_att.L2FMNAttack(): np.linspace(0, 10, num=20),
-    # fb_att.L1FMNAttack(): np.linspace(2, 150, num=20),
-    # fb_att.LinfinityBrendelBethgeAttack(steps=200): np.linspace(0, 0.5, num=10),
+    # fb_att.LinfFastGradientAttack(): np.linspace(0, 1, num=20),
+    # fb_att.LinfProjectedGradientDescentAttack(): np.linspace(0, 0.05, num=5),
+    # fb_att.L2FastGradientAttack(): np.linspace(1, 150, num=20),
+    # fb_att.L2ProjectedGradientDescentAttack(): np.linspace(0.5, 10, num=5),
+    fb_att.LInfFMNAttack(): np.linspace(0, 0.5, num=20),
+    fb_att.L2FMNAttack(): np.linspace(0, 10, num=20),
+    fb_att.L1FMNAttack(): np.linspace(2, 150, num=20),
+    fb_att.LinfinityBrendelBethgeAttack(steps=200): np.linspace(0, 0.5, num=10),
     },                                                         
     {
-    fb_att.L2RepeatedAdditiveUniformNoiseAttack(): np.linspace(1, 250, num=25),
-    fb_att.L2RepeatedAdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=25),
-    fb_att.L2BrendelBethgeAttack(steps=200): np.linspace(0, 5, num=20),
-    fb_att.LinearSearchBlendedUniformNoiseAttack(distance=LpDistance(100)): np.linspace(0, 20, num=20),                       # (very) perturbed images
-    fb_att.SaltAndPepperNoiseAttack(): np.linspace(1, 250, num=20),
-    # fb_att.LinfDeepFoolAttack(): np.linspace(0, 0.5, num=10),
-    # fb_att.L2DeepFoolAttack(): np.linspace(0, 10, num=20),
-    # fb_att.GaussianBlurAttack(distance=LpDistance(2)): np.linspace(1, 200, num=20),
-    # fb_att.L2ClippingAwareAdditiveUniformNoiseAttack(): np.linspace(1, 250, num=20),
+    # fb_att.L2RepeatedAdditiveUniformNoiseAttack(): np.linspace(1, 250, num=25),
+    # fb_att.L2RepeatedAdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=25),
+    # fb_att.L2BrendelBethgeAttack(steps=200): np.linspace(0, 5, num=20),
+    # fb_att.LinearSearchBlendedUniformNoiseAttack(distance=LpDistance(100)): np.linspace(0, 20, num=20),                       # (very) perturbed images
+    # fb_att.SaltAndPepperNoiseAttack(): np.linspace(1, 250, num=20),
+    fb_att.LinfDeepFoolAttack(): np.linspace(0, 0.5, num=10),
+    fb_att.L2DeepFoolAttack(): np.linspace(0, 10, num=20),
+    fb_att.GaussianBlurAttack(distance=LpDistance(2)): np.linspace(1, 200, num=20),
+    fb_att.L2ClippingAwareAdditiveUniformNoiseAttack(): np.linspace(1, 250, num=20),
     },
     { 
-    fb_att.LinfRepeatedAdditiveUniformNoiseAttack(): np.linspace(0.1, 5, num=20),   
-    fb_att.L2ClippingAwareRepeatedAdditiveUniformNoiseAttack(): np.linspace(1, 250, num=25),
-    fb_att.L1BrendelBethgeAttack(steps=200): np.linspace(2, 100, num=10),
-    fb_att.LinfAdditiveUniformNoiseAttack(): np.linspace(0, 2, num=30),
-    # fb_att.LinfBasicIterativeAttack(): np.linspace(0, 0.1, num=15),
-    # fb_att.BoundaryAttack(steps=10000): np.linspace(1, 150, num=10),                              # very slow
-    # fb_att.L2ClippingAwareRepeatedAdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=25),
+    # fb_att.LinfRepeatedAdditiveUniformNoiseAttack(): np.linspace(0.1, 5, num=20),   
+    # fb_att.L2ClippingAwareRepeatedAdditiveUniformNoiseAttack(): np.linspace(1, 250, num=25),
+    # fb_att.L1BrendelBethgeAttack(steps=200): np.linspace(2, 100, num=10),
+    # fb_att.LinfAdditiveUniformNoiseAttack(): np.linspace(0, 2, num=30),
+    fb_att.LinfBasicIterativeAttack(): np.linspace(0, 0.1, num=15),
+    fb_att.BoundaryAttack(steps=10000): np.linspace(1, 150, num=10),                              # very slow
+    fb_att.L2ClippingAwareRepeatedAdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=25),
 
     },
     { 
-    fb_att.L2ClippingAwareAdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=20),
-    fb_att.L2AdditiveUniformNoiseAttack(): np.linspace(1, 250, num=20),
-    fb_att.VirtualAdversarialAttack(steps=100): np.linspace(10, 150, num=50),
-    fb_att.DDNAttack(): np.linspace(0, 10, num=20),
-    fb_att.L2BasicIterativeAttack(): np.linspace(0, 15, num=30),
-    # fb_att.EADAttack(steps=5000): np.linspace(1, 200, num=15),
-    # fb_att.L2AdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=20),
-    # fb_att.NewtonFoolAttack(): np.linspace(0, 50, num=20),
-    # fb_att.L2CarliniWagnerAttack(steps=1000): np.linspace(0, 10, num=10)
+    # fb_att.L2ClippingAwareAdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=20),
+    # fb_att.L2AdditiveUniformNoiseAttack(): np.linspace(1, 250, num=20),
+    # fb_att.VirtualAdversarialAttack(steps=100): np.linspace(10, 150, num=50),
+    # fb_att.DDNAttack(): np.linspace(0, 10, num=20),
+    # fb_att.L2BasicIterativeAttack(): np.linspace(0, 15, num=30),
+    fb_att.EADAttack(steps=5000): np.linspace(1, 200, num=15),
+    fb_att.L2AdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=20),
+    fb_att.NewtonFoolAttack(): np.linspace(0, 50, num=20),
+    fb_att.L2CarliniWagnerAttack(steps=1000): np.linspace(0, 10, num=10)
     } ]
 
     all_attacks = attack_to_epsilon[attack_group_index]
