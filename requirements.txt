@@ -1,0 +1,13 @@
+numpy==2.2.5
+scipy==1.15.2
+matplotlib==3.10.1
+scikit-learn==1.6.1
+torch==2.7.0+cu118
+torchaudio==2.7.0+cu118
+torchvision==0.22.0+cu118
+foolbox==3.3.4
+grad-cam==1.5.5
+scikit-image==0.25.2
+datasets==3.6.0
+pandas==2.2.3
+seaborn==0.13.2
