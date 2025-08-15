@@ -12,7 +12,7 @@ from torchvision import transforms
 from torchvision.transforms.functional import convert_image_dtype
 from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
 from pytorch_grad_cam import GradCAM, HiResCAM, GradCAMElementWise, GradCAMPlusPlus, XGradCAM, AblationCAM, KPCA_CAM
-from pytorch_grad_cam import ScoreCAM, EigenCAM, EigenGradCAM, LayerCAM, FullGrad, DeepFeatureFactorization
+from pytorch_grad_cam import ScoreCAM, EigenCAM, EigenGradCAM, LayerCAM, FullGrad
 from pytorch_grad_cam.utils.image import show_cam_on_image, preprocess_image
 import foolbox as fb
 import scipy.stats
@@ -26,6 +26,7 @@ import seaborn as sns # type: ignore
 import matplotlib.pyplot as plt
 from skimage.metrics import structural_similarity
 from random import randrange
+from batch_wise_pipeline import calculate_metrics, calculate_spearman_rank_correlation
 
 '''
 tensor: Tensor of shape [C, H, W] normalized with given mean and std
@@ -112,38 +113,15 @@ def calculate_multiple_explanations(batch, target_layers, targets, model, method
                             #eigen_smooth=True)
         return grayscale_cam
 
-''' function to visualize the image with pixel highlight overlay of explanation method
-arguments: image_np: float32 with values in [0,1] as numpy array with (H, W, C) format
-grayscale_cam: output produced by explanation method
-prediction: string representing predicted class 
-method: xAI method used to produce cam'''
-def visualize_explanation(image_np, grayscale_cam, prediction, method):
-    image_np = denormalize_np(image_np)
-    method_name = str(method).split(".")[-1].split("\'")[0]
-    visualization = show_cam_on_image(denormalize_np(image_np), grayscale_cam, use_rgb=True)
-
-    # === Display using Matplotlib ===
-    fig_vis, axes = plt.subplots(1, 2, figsize=(10, 5))
-    axes[0].imshow(denormalize_np(image_np)) 
-    axes[0].set_title("Original Image\n")
-    axes[0].axis('off')
-
-    axes[1].imshow(visualization)
-    axes[1].set_title(f"{method_name}\nTarget/Pred: {prediction}")
-    axes[1].axis('off')
-
-    fig_vis.suptitle(f"{method_name} for ResNet50")
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-    # print(f"{method_name} visualization complete.")
-    return fig_vis
 
 ''' function to combine visualization of the original image and adversarial image and the corresponding saliency maps'''
-def compare_visualizations(orig_image_np, grayscale_cam_orig, pred_orig, adv_image_np, grayscale_cam_adv, pred_adv, method_name, attack_name):
+def compare_visualizations(orig_image_np, grayscale_cam_orig, pred_orig, adv_image_np, grayscale_cam_adv, pred_adv, method):
     orig_image_np = denormalize_np(orig_image_np)                                       # convert to [0, 1] range for visualization
     adv_image_np = denormalize_np(adv_image_np)
 
     orig_visualization = show_cam_on_image(orig_image_np, grayscale_cam_orig, use_rgb=True)
     adv_visualization = show_cam_on_image(adv_image_np, grayscale_cam_adv, use_rgb=True)
+    method_name = str(method).split(".")[-1].split("\'")[0]
 
     # === Display using Matplotlib ===
     fig, axes = plt.subplots(2, 2)  # Slightly smaller width
@@ -164,121 +142,13 @@ def compare_visualizations(orig_image_np, grayscale_cam_orig, pred_orig, adv_ima
     axes[1, 1].set_title(f"{method_name}\nPredicted class: {pred_adv}")
     axes[1, 1].axis('off')
 
-    fig.suptitle(f"Attack: {attack_name}")
+    #fig.suptitle(f"Comparison for {method_name}", fontsize=14)
 
     # Precise control of spacing
     fig.subplots_adjust(wspace=0.1, hspace=0.4, top=0.84)
 
     return fig
 
-
-''' function to calculate the difference in explanation for original and adversarial image
-arguments: grayscale_cam_orig: pixel importances for original image, 
-grayscale_cam_adv: pixel importances for adversarial input
-returns: mean of pixelwise differences'''
-def mean_pixel_difference(grayscale_cam_orig, grayscale_cam_adv):
-    return np.mean(np.abs(grayscale_cam_orig - grayscale_cam_adv))
-
-''' function to count the number of pixels that are significantly different for both explanations
-arguments: grayscale_cam_orig: pixel importances for original image, 
-grayscale_cam_adv: pixel importances for adversarial input
-returns: number of pixels, where the importance is significantly different (difference greater than 0.2)'''
-def pixel_differrences_count(grayscale_cam_orig, grayscale_cam_adv):
-    differences = np.abs(grayscale_cam_orig - grayscale_cam_adv)
-    return np.count_nonzero(differences > 0.2)
-
-''' function to measure how the number of important pixels changes for the original and adversarial image based on a threshold'''
-def pixel_activation_ratio(grayscale_cam_orig, grayscale_cam_adv, threshold=0):
-    pixels_activated_orig = np.count_nonzero(grayscale_cam_orig > threshold)
-    pixels_activated_adv = np.count_nonzero(grayscale_cam_adv > threshold)
-    return pixels_activated_adv/pixels_activated_orig
-
-''' function to count the number of regions (connected components) that are considered highly relevant 
-(pixel importance higher than 0.9)'''
-def count_attention_regions(saliency_map: np.ndarray, threshold: float = 0.9) -> int:
-    # Thresholding: keep only high-importance pixels
-    binary_map = (saliency_map >= threshold).astype(np.uint8)
-
-    # Label connected components (8-connectivity)
-    labeled_map, num_regions = scipy.ndimage.label(binary_map, structure=np.ones((3, 3)))
-
-    return num_regions
-
-''' function to turn the saliency map into a probability distribution for calculation of Kullback-Leibler Divergence
-arguments: saliency_map: numpy array of pixel importances
-returns: normalized saliency map, adding small epsilon to avoid 0 values'''
-def normalize_saliency_map(saliency_map: np.ndarray):
-    saliency_map = saliency_map + 1e-10
-    return saliency_map / np.sum(saliency_map)
-
-''' function to compute the Jenson-Shannon Divergence (symmetric distance for probability distributions)'''
-def compute_js_divergence(saliency1: np.ndarray, saliency2: np.ndarray):
-    saliency1_norm = normalize_saliency_map(saliency1)
-    saliency2_norm = normalize_saliency_map(saliency2)
-
-    # Compute M = (P + Q) / 2
-    M = (saliency1_norm + saliency2_norm) / 2
-
-    # Compute KL(P || M) and KL(Q || M)
-    kl_pm = np.sum(kl_div(saliency1_norm, M))
-    kl_qm = np.sum(kl_div(saliency2_norm, M))
-
-    # JS Divergence
-    js_divergence = 0.5 * (kl_pm + kl_qm)
-    return js_divergence
-
-''' function to compute the intersection over union for the saliency maps of original and adversarial image'''
-def compute_iou(saliency_map_orig, saliency_map_adv, threshold_a=0.8, threshold_b=0.8):
-    A_mask = saliency_map_orig > np.quantile(saliency_map_orig, threshold_a)
-    B_mask = saliency_map_adv > np.quantile(saliency_map_adv, threshold_b)
-
-    # Calculate IoU
-    intersection = np.logical_and(A_mask, B_mask).sum()
-    union = np.logical_or(A_mask, B_mask).sum()
-
-    return intersection / union if union > 0 else 0.0
-
-def calculate_spearman_rank_correlation(saliency_map_orig, saliency_map_adv):
-
-    # 1. Flatten the maps
-    original_flat = saliency_map_orig.flatten()
-    adversarial_flat = saliency_map_adv.flatten()
-
-    # 2. Calculate Spearman's rank correlation
-    correlation_coefficient, p_value = scipy.stats.spearmanr(original_flat, adversarial_flat)
-
-    print(f"Spearman's Rank Correlation Coefficient: {correlation_coefficient:.4f}")
-
-    return correlation_coefficient
-
-''' function to calculate metrics to compare the original saliency map and the one for the adversarial.
-arguments: grayscale_cam_orig: pixel importances of original image,
-           grayscale_cam_adv: pixel importances of adversarial
-returns: mean of absolute pixel differences, percentage of pixels different according to threshold (0.2), cosine similarity, activation ratio'''
-def calculate_metrics(grayscale_cam_orig, grayscale_cam_adv):
-    mean_pixel_diff = mean_pixel_difference(grayscale_cam_orig, grayscale_cam_adv)
-    percent_different_pixels = pixel_differrences_count(grayscale_cam_orig, grayscale_cam_adv) / (grayscale_cam_orig.shape[0] * grayscale_cam_orig.shape[1]) * 100
-    cosine_sim = cosine_similarity(grayscale_cam_orig.flatten().reshape(1, -1), grayscale_cam_adv.flatten().reshape(1, -1))[0, 0]
-    activation_ratio = pixel_activation_ratio(grayscale_cam_orig, grayscale_cam_adv)
-    js_div = compute_js_divergence(grayscale_cam_orig, grayscale_cam_adv)
-    highly_relevant_ratio = pixel_activation_ratio(grayscale_cam_orig, grayscale_cam_adv, threshold=0.7)
-    intersection_over_union = compute_iou(grayscale_cam_orig, grayscale_cam_adv)
-
-    print(f"The mean absolute difference in pixel importances is {(mean_pixel_diff):.4f}")
-    print(f"The percentage of pixels that are significantly different is {(percent_different_pixels):.2f}%")
-    print(f"The cosine similarity is {(cosine_sim):.3f}")
-    print(f"The ratio of activated pixels is: {(activation_ratio):.3f}")
-    print(f"The ratio of highly relevant pixels is: {(highly_relevant_ratio):.3f}")
-    print(f"JS Divergence: {js_div}")
-
-    num_regions_orig = count_attention_regions(grayscale_cam_orig, threshold=0.8)
-    num_regions_adv = count_attention_regions(grayscale_cam_adv, threshold=0.8)
-    print(f"Number of attention regions original: {num_regions_orig}")
-    print(f"Number of attention regions adversarial: {num_regions_adv}")
-    print(f"The intersection over union is: {(intersection_over_union):.3f}")
-    print("\n")
-
-    return mean_pixel_diff, percent_different_pixels, cosine_sim, activation_ratio, highly_relevant_ratio, js_div, num_regions_orig, num_regions_adv, intersection_over_union
 
 ''' function to check if the model makes the correct classification and if it does creating adversarial image
 arguments: batch of preprocessed images (Tensor of size [N, 3, 224, 224]), label (Tensor of size [N] containing the class_ids),
@@ -311,18 +181,15 @@ arguments: preprocessed images (Tensor of size [N, 3, 224, 224]), labels (Tensor
 xAImethod: class from pytorch-gradcam, adversarials: Tensor of size [N, 3, 224, 224]'''
 def create_and_compare_explanations(model, images, labels, xAImethod, attack, adversarials, csv_file, ids):
     predictions = make_batch_predictions(model, images)
+    adv_predictions = make_batch_predictions(model, adversarials)
     weights = ResNet50_Weights.DEFAULT
 
-    target_layers = [model.layer4[-1]]
-    targets = None
-
-    adv_predictions = make_batch_predictions(model, adversarials)
-
     batch = torch.cat([images, adversarials], dim=0)
-
-    grayscale_cams = calculate_multiple_explanations(batch, target_layers, targets, model, xAImethod)
-
+    target_layers = [model.layer4[-1]]
     number_of_images = images.shape[0]
+
+    targets = None
+    grayscale_cams = calculate_multiple_explanations(batch, target_layers, targets, model, xAImethod)
 
     for i in range(number_of_images):
         image = images[i]
@@ -332,8 +199,6 @@ def create_and_compare_explanations(model, images, labels, xAImethod, attack, ad
         score = predictions[i][2]
         adv_pred_str = adv_predictions[i][0]
         score_adv = adv_predictions[i][2]
-        print("ORIGINAL PREDICTION: ", orig_pred_str, " with score: ", score)
-        print("ADVERSARIAL PREDICTION: ", adv_pred_str, " with score: ", score_adv)
 
         image_np = image.permute(1, 2, 0).cpu().numpy()
         adv_image_np = adv_image.permute(1, 2, 0).cpu().numpy()
@@ -345,9 +210,9 @@ def create_and_compare_explanations(model, images, labels, xAImethod, attack, ad
         attack_name = str(attack).split("(")[0]
         class_name = weights.meta["categories"][labels[i]]
 
-        #fig_to_save = compare_visualizations(image_np, grayscale_cam_orig, orig_pred_str, adv_image_np, grayscale_cam_adv, adv_pred_str, method_name, attack_name)
-        #fig_to_save.savefig("results/images/" + method_name + "_" + attack_name + "_" + class_name + str(id) + ".png")
-        #plt.close(fig_to_save)
+        fig_to_save = compare_visualizations(image_np, grayscale_cam_orig, orig_pred_str, adv_image_np, grayscale_cam_adv, adv_pred_str, xAImethod)
+        fig_to_save.savefig("results/images/" + method_name + "_" + attack_name + "_" + class_name + str(id) + "_" + adv_pred_str + ".png")
+        plt.close(fig_to_save)
         images_similarity = torch.mean((image - adv_image)**2).item()
         print(f"Difference of images: {images_similarity}")
 
@@ -373,7 +238,7 @@ def create_and_compare_explanations(model, images, labels, xAImethod, attack, ad
                 mean_pixel_diff, percent_different_pixels, num_regions_orig, num_regions_adv, cosine_sim, 
                 activation_ratio, js_div, highly_relevant_ratio, intersection_over_union, ssim_value, spearman_rank_coeff
             ])
-    del grayscale_cam_adv, grayscale_cam_orig, grayscale_cams, batch
+
 
 
 ''' function to load images from imagenet subset and preprocess them
@@ -439,14 +304,6 @@ def create_explanations_micro_batch_wise(model, batch_images, batch_labels, xAIm
 
 if __name__ == '__main__':
 
-    # Check if argument is provided
-    if len(sys.argv) < 2:
-        print("Error: Missing argument. Usage: python batch_wise_pipeline.py <index>")
-        sys.exit(1)
-
-    # Get the argument (e.g., 0, 1, 2, or 3)
-    attack_group_index = int(sys.argv[1])
-    print(f"Running pipeline with index: {attack_group_index}")
     setup_result_folders()
 
 
@@ -463,65 +320,84 @@ if __name__ == '__main__':
     bounds = (-2.4, 2.8)
     
     fmodel = fb.PyTorchModel(model, bounds=bounds, preprocessing=None)
+                   
+    attack_to_epsilon = [{
+    fb_att.LinfFastGradientAttack(): np.linspace(0, 1, num=20),
+    fb_att.LinfProjectedGradientDescentAttack(): np.linspace(0, 0.05, num=5),
+    fb_att.L2FastGradientAttack(): np.linspace(1, 150, num=20),
+    fb_att.L2ProjectedGradientDescentAttack(): np.linspace(0.5, 10, num=5),
+    fb_att.LInfFMNAttack(): np.linspace(0, 0.5, num=20),
+    fb_att.L2FMNAttack(): np.linspace(0, 10, num=20),
+    fb_att.L1FMNAttack(): np.linspace(2, 150, num=20),
+    fb_att.LinfinityBrendelBethgeAttack(steps=200): np.linspace(0, 0.5, num=10),
+    },                                                         
+    {
+    fb_att.L2RepeatedAdditiveUniformNoiseAttack(): np.linspace(1, 250, num=25),
+    fb_att.L2RepeatedAdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=25),
+    fb_att.L2BrendelBethgeAttack(steps=200): np.linspace(0, 5, num=20),
+    fb_att.LinearSearchBlendedUniformNoiseAttack(distance=LpDistance(100)): np.linspace(0, 20, num=20),                       # (very) perturbed images
+    fb_att.SaltAndPepperNoiseAttack(): np.linspace(1, 250, num=20),
+    fb_att.LinfDeepFoolAttack(): np.linspace(0, 0.5, num=10),
+    fb_att.L2DeepFoolAttack(): np.linspace(0, 10, num=20),
+    fb_att.GaussianBlurAttack(distance=LpDistance(2)): np.linspace(1, 200, num=20),
+    fb_att.L2ClippingAwareAdditiveUniformNoiseAttack(): np.linspace(1, 250, num=20),
+    },
+    { 
+    fb_att.LinfRepeatedAdditiveUniformNoiseAttack(): np.linspace(0.1, 5, num=20),   
+    fb_att.L2ClippingAwareRepeatedAdditiveUniformNoiseAttack(): np.linspace(1, 250, num=25),
+    fb_att.L1BrendelBethgeAttack(steps=100): np.linspace(2, 100, num=10),
+    fb_att.LinfBasicIterativeAttack(): np.linspace(0, 0.1, num=15),
+    fb_att.BoundaryAttack(steps=10000): np.linspace(1, 150, num=10),                              # very slow
+    fb_att.L2ClippingAwareRepeatedAdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=25),
+
+    },
+    { 
+    fb_att.LinfAdditiveUniformNoiseAttack(): np.linspace(0, 2, num=30),
+    fb_att.L2ClippingAwareAdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=20),
+    fb_att.L2AdditiveUniformNoiseAttack(): np.linspace(1, 250, num=20),
+    fb_att.VirtualAdversarialAttack(steps=100): np.linspace(10, 150, num=50),
+    fb_att.DDNAttack(): np.linspace(0, 10, num=20),
+    fb_att.L2BasicIterativeAttack(): np.linspace(0, 15, num=30),
+    fb_att.EADAttack(steps=5000): np.linspace(1, 200, num=15),
+    fb_att.L2AdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=20),
+    fb_att.NewtonFoolAttack(): np.linspace(0, 50, num=20),
+    fb_att.L2CarliniWagnerAttack(steps=1000): np.linspace(0, 10, num=10)
+    } ]
+    explanation_methods = {"GradCAM": GradCAM,  "GradCAMPlusPlus": GradCAMPlusPlus, "EigenCAM": EigenCAM, 
+                           "EigenGradCAM": EigenGradCAM, "LayerCAM": LayerCAM, "KPCA_CAM": KPCA_CAM, 
+                           "AblationCAM": AblationCAM, "FullGrad": FullGrad, "ScoreCAM": ScoreCAM}
+    # Define the path to the CSV file
+    csv_file = "results/visualization_cam_comparison_metrics.csv"
+
+
+
+    ### ADJUST WHICH ATTACKS TO USE
+    all_attacks = { fb_att.DDNAttack(): np.linspace(0, 10, num=20),
+    }
+
+    ### ADJUST WHICH METHODS TO USE
+    explanation_methods = {"EigenGradCAM": EigenGradCAM, }
+
+    # Define the image IDs to process
+    image_ids = [0, 100, 200, 500, 600, 1000, 1500, 1700, 2000, 2200, 2672]
+
 
     images, labels = load_and_transform_images(preprocess, dataset_url="Multimodal-Fatima/Imagenet1k_sample_validation")
 
     ids = torch.arange(len(images))
+    # Create a TensorDataset to hold images, labels, and ids, but only those with the specified image_ids
+    image_ids = torch.tensor(image_ids, device=images.device)
+    mask = torch.isin(ids, image_ids)
+    images = images[mask]
+    labels = labels[mask]
+    ids = ids[mask]
 
     dataset = TensorDataset(images, labels, ids)
     data_loader = DataLoader(dataset, batch_size=16, shuffle=False)
 
-                   
-    attack_to_epsilon = [ 
-        # {fb_att.LinfFastGradientAttack(): np.linspace(0, 1, num=20)},
-        # {fb_att.LinfProjectedGradientDescentAttack(): np.linspace(0, 0.05, num=5)},
-        # {fb_att.L2FastGradientAttack(): np.linspace(1, 150, num=20)},
-        # {fb_att.L2ProjectedGradientDescentAttack(): np.linspace(0.5, 10, num=5)},
-        # {fb_att.LInfFMNAttack(): np.linspace(0, 0.5, num=20)},
-        # {fb_att.L2FMNAttack(): np.linspace(0, 10, num=20)},
-        {fb_att.L1FMNAttack(): np.linspace(2, 150, num=20)},
-        {fb_att.LinfinityBrendelBethgeAttack(steps=100): np.linspace(0, 0.5, num=10)},
-        # {fb_att.L2RepeatedAdditiveUniformNoiseAttack(): np.linspace(1, 250, num=25)},
-        # {fb_att.L2RepeatedAdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=25)},
-        {fb_att.L2BrendelBethgeAttack(steps=100): np.linspace(0, 5, num=20)},
-        # {fb_att.LinearSearchBlendedUniformNoiseAttack(distance=LpDistance(100)): np.linspace(0, 20, num=20)},
-        # {fb_att.SaltAndPepperNoiseAttack(): np.linspace(1, 250, num=20)},
-        # {fb_att.LinfDeepFoolAttack(): np.linspace(0, 0.5, num=10)},
-        # {fb_att.L2DeepFoolAttack(): np.linspace(0, 10, num=20)},
-        # {fb_att.GaussianBlurAttack(distance=LpDistance(2)): np.linspace(1, 200, num=20)},
-        # {fb_att.L2ClippingAwareAdditiveUniformNoiseAttack(): np.linspace(1, 250, num=20)},
-        # {fb_att.LinfRepeatedAdditiveUniformNoiseAttack(): np.linspace(0.1, 3, num=20)},
-        # {fb_att.L2ClippingAwareRepeatedAdditiveUniformNoiseAttack(): np.linspace(1, 250, num=25)},
-        {fb_att.L1BrendelBethgeAttack(steps=100): np.linspace(2, 100, num=10)},
-        # {fb_att.LinfBasicIterativeAttack(): np.linspace(0, 0.1, num=15)},
-        # {fb_att.BoundaryAttack(steps=10000): np.linspace(1, 150, num=10)},
-        # {fb_att.L2ClippingAwareRepeatedAdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=25)},
-        # {fb_att.LinfAdditiveUniformNoiseAttack(): np.linspace(0.1, 3, num=20)},
-        # {fb_att.L2ClippingAwareAdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=20)},
-        # {fb_att.L2AdditiveUniformNoiseAttack(): np.linspace(1, 250, num=20)},
-        # {fb_att.VirtualAdversarialAttack(steps=100): np.linspace(10, 150, num=50)},
-        # {fb_att.DDNAttack(): np.linspace(0, 10, num=20)},
-        {fb_att.L2BasicIterativeAttack(): np.linspace(0, 15, num=30)},
-        {fb_att.EADAttack(steps=4000): np.linspace(1, 200, num=15)},
-        # {fb_att.L2AdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=20)},
-        # {fb_att.NewtonFoolAttack(): np.linspace(0, 50, num=20)},
-        # {fb_att.L2CarliniWagnerAttack(steps=1000): np.linspace(0, 10, num=10)} 
-        ]
-
-    all_attacks = attack_to_epsilon[attack_group_index]
-
-    # Define the path to the CSV file
-    csv_file = "results/cam_comparison_metrics" + str(attack_group_index) + ".csv"
-
-    explanation_methods = {"GradCAM": GradCAM,  "GradCAMPlusPlus": GradCAMPlusPlus, "EigenCAM": EigenCAM, 
-                           "EigenGradCAM": EigenGradCAM, "LayerCAM": LayerCAM, "KPCA_CAM": KPCA_CAM, 
-                           "AblationCAM": AblationCAM, "FullGrad": FullGrad, "ScoreCAM": ScoreCAM}
-    # give exact same saliency maps: [GradCAM, HiResCAM, XGradCAM], [LayerCAM, GradCAMElementwise]
-
     for attack, epsilons in all_attacks.items():
-        num_adv_failed = 0
         print(f"Doing attack: {attack}")
-        ## create adversarial images then use explanation methods
+
         for batch_images, batch_labels, batch_ids in data_loader:
             batch_images = batch_images.to(device)
             batch_labels = batch_labels.to(device)
@@ -536,7 +412,6 @@ if __name__ == '__main__':
             adv_images = create_untargeted_adversarials(batch_images, batch_labels, attack, epsilons)
             num_none = sum(adv is None for adv in adv_images)
             print(f"No adversarial in {num_none} cases for current batch.")
-            num_adv_failed += num_none
 
             batch_images, batch_labels, batch_ids, adv_images = filter_adversarial_fails(batch_images, batch_labels, batch_ids, adv_images)
             if adv_images is None:
@@ -553,9 +428,8 @@ if __name__ == '__main__':
                 else:
                     micro_batch_size = 64
                     create_explanations_micro_batch_wise(model, batch_images, batch_labels, xAImethod, attack, adv_images, csv_file, batch_ids, micro_batch_size, device)
-            torch.cuda.empty_cache()
-        
-        print(f"Failed to create adversarial in {num_adv_failed} cases. For attack: {attack}. \n")
+
+            
             
 
 
