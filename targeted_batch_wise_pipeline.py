@@ -10,7 +10,7 @@ def create_targeted_adversarials(image_batch, label_batch, attack, epsilons):
             outputs = model(image_batch)
             probs = torch.softmax(outputs, dim=1)
             lowest_scores, lowest_classes = probs.min(dim=1)
-   
+    print(lowest_classes)
     #target_labels = (label_batch + 300) % 1000
     target_labels = lowest_classes
     criterion = fb.criteria.TargetedMisclassification(target_labels)

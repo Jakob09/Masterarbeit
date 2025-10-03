@@ -115,7 +115,7 @@ def calculate_multiple_explanations(batch, target_layers, targets, model, method
 
 
 ''' function to combine visualization of the original image and adversarial image and the corresponding saliency maps'''
-def compare_visualizations(orig_image_np, grayscale_cam_orig, pred_orig, adv_image_np, grayscale_cam_adv, pred_adv, method):
+def compare_visualizations(orig_image_np, grayscale_cam_orig, pred_orig, adv_image_np, grayscale_cam_adv, pred_adv, method, attack_name, targeted=False):
     orig_image_np = denormalize_np(orig_image_np)                                       # convert to [0, 1] range for visualization
     adv_image_np = denormalize_np(adv_image_np)
 
@@ -124,28 +124,30 @@ def compare_visualizations(orig_image_np, grayscale_cam_orig, pred_orig, adv_ima
     method_name = str(method).split(".")[-1].split("\'")[0]
 
     # === Display using Matplotlib ===
-    fig, axes = plt.subplots(2, 2)  # Slightly smaller width
+    fig, axes = plt.subplots(2, 2, figsize=(10, 8))  # Slightly smaller width
 
     axes[0, 0].imshow(orig_image_np)
-    axes[0, 0].set_title("Original Image")
+    axes[0, 0].set_title("Original Image", fontsize=14)
     axes[0, 0].axis('off')
 
     axes[0, 1].imshow(orig_visualization)
-    axes[0, 1].set_title(f"{method_name}\nPredicted class: {pred_orig}")
+    axes[0, 1].set_title(f"{method_name}\nPredicted Class: {pred_orig}", fontsize=14)
     axes[0, 1].axis('off')
 
     axes[1, 0].imshow(adv_image_np)
-    axes[1, 0].set_title("Adversarial Image")
+    axes[1, 0].set_title("Adversarial Image", fontsize=14)
     axes[1, 0].axis('off')
 
     axes[1, 1].imshow(adv_visualization)
-    axes[1, 1].set_title(f"{method_name}\nPredicted class: {pred_adv}")
+    axes[1, 1].set_title(f"{method_name}\nPredicted Class: {pred_adv}", fontsize=14)
     axes[1, 1].axis('off')
 
-    #fig.suptitle(f"Comparison for {method_name}", fontsize=14)
-
+    if targeted:
+        fig.suptitle(f"Attack: Targeted {attack_name}", fontsize=14)
+    else:
+        fig.suptitle(f"Attack: {attack_name}", fontsize=14)
     # Precise control of spacing
-    fig.subplots_adjust(wspace=0.1, hspace=0.4, top=0.84)
+    fig.subplots_adjust(wspace=0.001, hspace=0.2, top=0.88, bottom=0.02, left=0.04, right=0.96)
 
     return fig
 
@@ -175,11 +177,43 @@ def create_untargeted_adversarials(image_batch, label_batch, attack, epsilons):
 
     return selected_advs
 
+''' function to check if the model makes the correct classification and if it does creating adversarial image
+arguments: batch of preprocessed images (Tensor of size [N, 3, 224, 224]), label (Tensor of size [N] containing the class_ids),
+attack: Class from foolbox.attacks, epsilons: numpy array of epsilons to try for that attack
+returns: selected_advs: adversarial images (Tensor of size [N, 3, 224, 224]) (None if no adversarial was produced)'''
+def create_targeted_adversarials(image_batch, label_batch, attack, epsilons):
+    with torch.no_grad():
+            outputs = model(image_batch)
+            probs = torch.softmax(outputs, dim=1)
+            lowest_scores, lowest_classes = probs.min(dim=1)
+    print(lowest_classes)
+    target_labels = lowest_classes
+    criterion = fb.criteria.TargetedMisclassification(target_labels)
+
+    raw, clipped, is_adv = attack(fmodel, image_batch, criterion, epsilons=epsilons)                      # clipped: list of tensors of size [N, 3, 224, 224] -> index of list corresponds to epsilon
+                                                                                                            # different images might have different best epsilons
+    selected_advs = []
+    K, N = is_adv.shape                             # K = #epsilons, N = #images
+
+    for i in range(N):                              # for each image in batch
+        success = is_adv[:, i]
+        indices = torch.nonzero(success, as_tuple=False)
+        if indices.numel() > 0:
+            first_true_index = indices[0][0].item()                                             # smallest epsilon that succeeded
+            adv_image = clipped[first_true_index][i]
+            selected_advs.append(adv_image)
+            print(f"Adversarial produced with Epsilon: {epsilons[first_true_index]}")
+        else:
+            print("No adversarial was produced.")
+            selected_advs.append(None)
+
+    return selected_advs
+
 ''' function to run the explanation on the original image and compare the explanation for the adversarial with the original one
 saves generated plots (comparison of heatmaps) and stores metrics of comparison in csv file
 arguments: preprocessed images (Tensor of size [N, 3, 224, 224]), labels (Tensor of size [N] containing class_id),
 xAImethod: class from pytorch-gradcam, adversarials: Tensor of size [N, 3, 224, 224]'''
-def create_and_compare_explanations(model, images, labels, xAImethod, attack, adversarials, csv_file, ids):
+def create_and_compare_explanations(model, images, labels, xAImethod, attack, adversarials, csv_file, ids, targeted=False):
     predictions = make_batch_predictions(model, images)
     adv_predictions = make_batch_predictions(model, adversarials)
     weights = ResNet50_Weights.DEFAULT
@@ -210,8 +244,11 @@ def create_and_compare_explanations(model, images, labels, xAImethod, attack, ad
         attack_name = str(attack).split("(")[0]
         class_name = weights.meta["categories"][labels[i]]
 
-        fig_to_save = compare_visualizations(image_np, grayscale_cam_orig, orig_pred_str, adv_image_np, grayscale_cam_adv, adv_pred_str, xAImethod)
-        fig_to_save.savefig("results/images/" + method_name + "_" + attack_name + "_" + class_name + str(id) + "_" + adv_pred_str + ".png")
+        fig_to_save = compare_visualizations(image_np, grayscale_cam_orig, orig_pred_str, adv_image_np, grayscale_cam_adv, adv_pred_str, xAImethod, attack_name, targeted=targeted)
+        if targeted:
+            fig_to_save.savefig("results/images/targeted/" + method_name + "_" + attack_name + "_targeted_" + class_name + str(id) + "_" + adv_pred_str + ".png", dpi=300)
+        else:
+            fig_to_save.savefig("results/images/" + method_name + "_" + attack_name + "_" + class_name + str(id) + "_" + adv_pred_str + ".png", dpi=300)
         plt.close(fig_to_save)
         images_similarity = torch.mean((image - adv_image)**2).item()
         print(f"Difference of images: {images_similarity}")
@@ -221,6 +258,7 @@ def create_and_compare_explanations(model, images, labels, xAImethod, attack, ad
 
         ssim_value = structural_similarity(grayscale_cam_orig, grayscale_cam_adv, data_range=1)
         spearman_rank_coeff = calculate_spearman_rank_correlation(grayscale_cam_orig, grayscale_cam_adv)
+        num_important_pixels = np.count_nonzero(grayscale_cam_orig > 0.7)
 
         # Write header if the file does not exist
         write_header = not os.path.exists(csv_file)
@@ -231,12 +269,12 @@ def create_and_compare_explanations(model, images, labels, xAImethod, attack, ad
                 writer.writerow([
                     "image_id", "method_name", "attack_name", "class_name", "target_pred", "images_mean_difference", "score_original", "score_adversarial",
                     "mean_pixel_diff", "percent_different_pixels", "num_regions_orig", "num_regions_adv",
-                    "cosine_sim", "activation_ratio", "js_div", "highly_relevant_pixels_ratio", "intersection_over_union", "ssim", "spearman_rank_coeff"
+                    "cosine_sim", "activation_ratio", "js_div", "highly_relevant_pixels_ratio", "intersection_over_union", "ssim", "spearman_rank_coeff", "num_important_pixels"
                 ])
             writer.writerow([
                 id, method_name, attack_name, class_name, adv_pred_str, images_similarity, score, score_adv,
-                mean_pixel_diff, percent_different_pixels, num_regions_orig, num_regions_adv, cosine_sim, 
-                activation_ratio, js_div, highly_relevant_ratio, intersection_over_union, ssim_value, spearman_rank_coeff
+                mean_pixel_diff, percent_different_pixels, num_regions_orig, num_regions_adv, cosine_sim,
+                activation_ratio, js_div, highly_relevant_ratio, intersection_over_union, ssim_value, spearman_rank_coeff, num_important_pixels
             ])
 
 
@@ -293,10 +331,12 @@ def filter_adversarial_fails(img_batch, label_batch, ids, adversarials):
         adversarials = None
     return img_batch, label_batch, ids, adversarials
 
-def create_explanations_micro_batch_wise(model, batch_images, batch_labels, xAImethod, attack, adv_images, csv_file, batch_ids, micro_batch_size, device):
+def create_explanations_micro_batch_wise(model, batch_images, batch_labels, xAImethod, attack, adv_images, csv_file, 
+                                         batch_ids, micro_batch_size, device, targeted=False):
     for start in range(0, batch_images.shape[0], micro_batch_size):
                             end = start + micro_batch_size
-                            create_and_compare_explanations(model, batch_images[start:end], batch_labels[start:end], xAImethod, attack, adv_images[start:end], csv_file, batch_ids[start:end])
+                            create_and_compare_explanations(model, batch_images[start:end], batch_labels[start:end], xAImethod, 
+                                                            attack, adv_images[start:end], csv_file, batch_ids[start:end], targeted=targeted)
                             gc.collect()
                             if device.type == 'cuda':
                                 torch.cuda.empty_cache()
@@ -305,8 +345,6 @@ def create_explanations_micro_batch_wise(model, batch_images, batch_labels, xAIm
 if __name__ == '__main__':
 
     setup_result_folders()
-
-
     # Use GPU if available
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
@@ -321,48 +359,64 @@ if __name__ == '__main__':
     
     fmodel = fb.PyTorchModel(model, bounds=bounds, preprocessing=None)
                    
-    attack_to_epsilon = [{
-    fb_att.LinfFastGradientAttack(): np.linspace(0, 1, num=20),
-    fb_att.LinfProjectedGradientDescentAttack(): np.linspace(0, 0.05, num=5),
-    fb_att.L2FastGradientAttack(): np.linspace(1, 150, num=20),
-    fb_att.L2ProjectedGradientDescentAttack(): np.linspace(0.5, 10, num=5),
-    fb_att.LInfFMNAttack(): np.linspace(0, 0.5, num=20),
-    fb_att.L2FMNAttack(): np.linspace(0, 10, num=20),
-    fb_att.L1FMNAttack(): np.linspace(2, 150, num=20),
-    fb_att.LinfinityBrendelBethgeAttack(steps=200): np.linspace(0, 0.5, num=10),
-    },                                                         
-    {
-    fb_att.L2RepeatedAdditiveUniformNoiseAttack(): np.linspace(1, 250, num=25),
-    fb_att.L2RepeatedAdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=25),
-    fb_att.L2BrendelBethgeAttack(steps=200): np.linspace(0, 5, num=20),
-    fb_att.LinearSearchBlendedUniformNoiseAttack(distance=LpDistance(100)): np.linspace(0, 20, num=20),                       # (very) perturbed images
-    fb_att.SaltAndPepperNoiseAttack(): np.linspace(1, 250, num=20),
-    fb_att.LinfDeepFoolAttack(): np.linspace(0, 0.5, num=10),
-    fb_att.L2DeepFoolAttack(): np.linspace(0, 10, num=20),
-    fb_att.GaussianBlurAttack(distance=LpDistance(2)): np.linspace(1, 200, num=20),
-    fb_att.L2ClippingAwareAdditiveUniformNoiseAttack(): np.linspace(1, 250, num=20),
-    },
-    { 
-    fb_att.LinfRepeatedAdditiveUniformNoiseAttack(): np.linspace(0.1, 5, num=20),   
-    fb_att.L2ClippingAwareRepeatedAdditiveUniformNoiseAttack(): np.linspace(1, 250, num=25),
-    fb_att.L1BrendelBethgeAttack(steps=100): np.linspace(2, 100, num=10),
-    fb_att.LinfBasicIterativeAttack(): np.linspace(0, 0.1, num=15),
-    fb_att.BoundaryAttack(steps=10000): np.linspace(1, 150, num=10),                              # very slow
-    fb_att.L2ClippingAwareRepeatedAdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=25),
+    # attack_to_epsilon = [{
+    # fb_att.LinfFastGradientAttack(): np.linspace(0, 1, num=20),
+    # fb_att.LinfProjectedGradientDescentAttack(): np.linspace(0, 0.05, num=5),
+    # fb_att.L2FastGradientAttack(): np.linspace(1, 150, num=20),
+    # fb_att.L2ProjectedGradientDescentAttack(): np.linspace(0.5, 10, num=5),
+    # fb_att.LInfFMNAttack(): np.linspace(0, 0.5, num=20),
+    # fb_att.L2FMNAttack(): np.linspace(0, 10, num=20),
+    # fb_att.L1FMNAttack(): np.linspace(2, 150, num=20),
+    # fb_att.LinfinityBrendelBethgeAttack(steps=200): np.linspace(0, 0.5, num=10),
+    # },                                                         
+    # {
+    # fb_att.L2RepeatedAdditiveUniformNoiseAttack(): np.linspace(1, 250, num=25),
+    # fb_att.L2RepeatedAdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=25),
+    # fb_att.L2BrendelBethgeAttack(steps=200): np.linspace(0, 5, num=20),
+    # fb_att.LinearSearchBlendedUniformNoiseAttack(distance=LpDistance(100)): np.linspace(0, 20, num=20),                       # (very) perturbed images
+    # fb_att.SaltAndPepperNoiseAttack(): np.linspace(1, 250, num=20),
+    # fb_att.LinfDeepFoolAttack(): np.linspace(0, 0.5, num=10),
+    # fb_att.L2DeepFoolAttack(): np.linspace(0, 10, num=20),
+    # fb_att.GaussianBlurAttack(distance=LpDistance(2)): np.linspace(1, 200, num=20),
+    # fb_att.L2ClippingAwareAdditiveUniformNoiseAttack(): np.linspace(1, 250, num=20),
+    # },
+    # { 
+    # fb_att.LinfRepeatedAdditiveUniformNoiseAttack(): np.linspace(0.1, 5, num=20),   
+    # fb_att.L2ClippingAwareRepeatedAdditiveUniformNoiseAttack(): np.linspace(1, 250, num=25),
+    # fb_att.L1BrendelBethgeAttack(steps=100): np.linspace(2, 100, num=10),
+    # fb_att.LinfBasicIterativeAttack(): np.linspace(0, 0.1, num=15),
+    # fb_att.BoundaryAttack(steps=10000): np.linspace(1, 150, num=10),                              # very slow
+    # fb_att.L2ClippingAwareRepeatedAdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=25),
 
-    },
-    { 
-    fb_att.LinfAdditiveUniformNoiseAttack(): np.linspace(0, 2, num=30),
-    fb_att.L2ClippingAwareAdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=20),
-    fb_att.L2AdditiveUniformNoiseAttack(): np.linspace(1, 250, num=20),
-    fb_att.VirtualAdversarialAttack(steps=100): np.linspace(10, 150, num=50),
-    fb_att.DDNAttack(): np.linspace(0, 10, num=20),
-    fb_att.L2BasicIterativeAttack(): np.linspace(0, 15, num=30),
-    fb_att.EADAttack(steps=5000): np.linspace(1, 200, num=15),
-    fb_att.L2AdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=20),
-    fb_att.NewtonFoolAttack(): np.linspace(0, 50, num=20),
-    fb_att.L2CarliniWagnerAttack(steps=1000): np.linspace(0, 10, num=10)
-    } ]
+    # },
+    # { 
+    # fb_att.LinfAdditiveUniformNoiseAttack(): np.linspace(0, 2, num=30),
+    # fb_att.L2ClippingAwareAdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=20),
+    # fb_att.L2AdditiveUniformNoiseAttack(): np.linspace(1, 250, num=20),
+    # fb_att.VirtualAdversarialAttack(steps=100): np.linspace(10, 150, num=50),
+    # fb_att.DDNAttack(): np.linspace(0, 10, num=20),
+    # fb_att.L2BasicIterativeAttack(): np.linspace(0, 15, num=30),
+    # fb_att.EADAttack(steps=5000): np.linspace(1, 200, num=15),
+    # fb_att.L2AdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=20),
+    # fb_att.NewtonFoolAttack(): np.linspace(0, 50, num=20),
+    # fb_att.L2CarliniWagnerAttack(steps=1000): np.linspace(0, 10, num=10)
+    # } ]
+
+    # attack_to_epsilon_targeted = [{
+    # fb_att.L2ProjectedGradientDescentAttack(): np.linspace(0.5, 10, num=5),
+    # fb_att.L2FMNAttack(): np.linspace(0, 10, num=20),
+    # fb_att.L1FMNAttack(): np.linspace(2, 500, num=20),
+    # fb_att.LinfProjectedGradientDescentAttack(): np.linspace(0, 0.05, num=5),
+    # fb_att.LInfFMNAttack(): np.linspace(0, 0.5, num=20),
+    # fb_att.LinfBasicIterativeAttack(): np.linspace(0, 0.1, num=15),
+    # fb_att.L2CarliniWagnerAttack(steps=1000): np.linspace(0, 10, num=10),
+    # fb_att.DDNAttack(): np.linspace(0, 10, num=20),
+    # fb_att.L2BasicIterativeAttack(): np.linspace(0, 15, num=30),
+    # } ]
+
+
+
+
     explanation_methods = {"GradCAM": GradCAM,  "GradCAMPlusPlus": GradCAMPlusPlus, "EigenCAM": EigenCAM, 
                            "EigenGradCAM": EigenGradCAM, "LayerCAM": LayerCAM, "KPCA_CAM": KPCA_CAM, 
                            "AblationCAM": AblationCAM, "FullGrad": FullGrad, "ScoreCAM": ScoreCAM}
@@ -372,15 +426,16 @@ if __name__ == '__main__':
 
 
     ### ADJUST WHICH ATTACKS TO USE
-    all_attacks = { fb_att.DDNAttack(): np.linspace(0, 10, num=20),
-    }
+    all_attacks = {fb_att.L2DeepFoolAttack(): np.linspace(0, 10, num=20), fb_att.L2CarliniWagnerAttack(steps=1000): np.linspace(0, 10, num=10),}
+    
+
+    all_attacks_targeted = {}
 
     ### ADJUST WHICH METHODS TO USE
-    explanation_methods = {"EigenGradCAM": EigenGradCAM, }
+    explanation_methods = {"GradCAM": GradCAM, "AblationCAM": AblationCAM}
 
     # Define the image IDs to process
-    image_ids = [0, 100, 200, 500, 600, 1000, 1500, 1700, 2000, 2200, 2672]
-
+    image_ids = [88, 99, 101, 111, 123, 145, 555, 666, 888]
 
     images, labels = load_and_transform_images(preprocess, dataset_url="Multimodal-Fatima/Imagenet1k_sample_validation")
 
@@ -431,5 +486,39 @@ if __name__ == '__main__':
 
             
             
+    for attack, epsilons in all_attacks_targeted.items():
+        print(f"Doing targeted attack: {attack}")
 
+        for batch_images, batch_labels, batch_ids in data_loader:
+            batch_images = batch_images.to(device)
+            batch_labels = batch_labels.to(device)
+            batch_ids = batch_ids.to(device)
+
+            predictions = make_batch_predictions(model, batch_images)
+
+            ## check if predictions are correct: 
+            batch_images, batch_labels, batch_ids = filter_wrong_classifications(batch_images, batch_labels, batch_ids, predictions)
+
+            ## create adversarials for the batch
+            adv_images = create_targeted_adversarials(batch_images, batch_labels, attack, epsilons)
+            num_none = sum(adv is None for adv in adv_images)
+            print(f"No adversarial in {num_none} cases for current batch.")
+
+            batch_images, batch_labels, batch_ids, adv_images = filter_adversarial_fails(batch_images, batch_labels, batch_ids, adv_images)
+            if adv_images is None:
+                continue
+
+            for xAImethod_name, xAImethod in explanation_methods.items():
+                print(f"Trying explanation method: {xAImethod}")
+                if xAImethod_name == "FullGrad":
+                    micro_batch_size = 8
+                    create_explanations_micro_batch_wise(model, batch_images, batch_labels, xAImethod, attack, adv_images, csv_file, batch_ids, micro_batch_size, device, targeted=True)
+                elif xAImethod_name == "ScoreCAM":
+                    micro_batch_size = 1
+                    create_explanations_micro_batch_wise(model, batch_images, batch_labels, xAImethod, attack, adv_images, csv_file, batch_ids, micro_batch_size, device, targeted=True)
+                else:
+                    micro_batch_size = 64
+                    create_explanations_micro_batch_wise(model, batch_images, batch_labels, xAImethod, attack, adv_images, csv_file, batch_ids, micro_batch_size, device, targeted=True)
+
+            
 
