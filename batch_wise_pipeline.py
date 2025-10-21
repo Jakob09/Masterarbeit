@@ -6,43 +6,24 @@ import csv
 import torch
 from torch.utils.data import TensorDataset, DataLoader
 import numpy as np
-import torchvision.io as io
 import matplotlib.pyplot as plt
-from torchvision import transforms
-from torchvision.transforms.functional import convert_image_dtype
 from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
 from pytorch_grad_cam import GradCAM, HiResCAM, GradCAMElementWise, GradCAMPlusPlus, XGradCAM, AblationCAM, KPCA_CAM
-from pytorch_grad_cam import ScoreCAM, EigenCAM, EigenGradCAM, LayerCAM, FullGrad, DeepFeatureFactorization
-from pytorch_grad_cam.utils.image import show_cam_on_image, preprocess_image
+from pytorch_grad_cam import ScoreCAM, EigenCAM, EigenGradCAM, LayerCAM, FullGrad
+from pytorch_grad_cam.utils.image import show_cam_on_image
 import foolbox as fb
 import scipy.stats
 from sklearn.metrics.pairwise import cosine_similarity
 import foolbox.attacks as fb_att
 from foolbox.distances import LpDistance
 from scipy.special import kl_div
-from datasets import load_dataset # type: ignore
-import pandas as pd
-import seaborn as sns # type: ignore
+from datasets import load_dataset
 import matplotlib.pyplot as plt
 from skimage.metrics import structural_similarity
-from random import randrange
 
-'''
-tensor: Tensor of shape [C, H, W] normalized with given mean and std
-mean/std: sequences of 3 values for RGB channels
-'''
-def denormalize(tensor):
-    mean = [0.485, 0.456, 0.406]
-    std  = [0.229, 0.224, 0.225]
-    mean = torch.tensor(mean).view(-1, 1, 1)
-    std = torch.tensor(std).view(-1, 1, 1)
-    return tensor * std + mean
-
-'''
-image_np: NumPy array of shape (H, W, C), float32, normalized
-mean, std: lists of 3 floats
-Returns: unnormalized image in [0, 1] range
-'''
+''' function to denormalize a numpy image
+arguments: image_np: NumPy array of shape (H, W, C), float32, normalized
+returns: unnormalized image in [0, 1] range'''
 def denormalize_np(image_np):
     mean = [0.485, 0.456, 0.406]
     std  = [0.229, 0.224, 0.225]
@@ -51,21 +32,9 @@ def denormalize_np(image_np):
     std = np.array(std).reshape(1, 1, 3)
     return np.clip((image_np * std + mean), 0, 1)
 
-''' function to get the targets and target_layers needed for the gradCam explanation
-arguments: model: resnet50 model, prediction: string representation of predicted class
-returns: target_layers: model layers to get explanation from, targets: class targeted'''
-def get_targets(model, prediction):
-    weights = ResNet50_Weights.DEFAULT
-    class_id = weights.meta["categories"].index(prediction)
-    target_layers = [model.layer4[-1]]
-    targets = [ClassifierOutputTarget(class_id)]
-    return targets, target_layers
-
 ''' function to make a class prediction for a batch of already preprocessed images
-arguments: model: resnet50 model, 
-img_batch: tensor of preprocessed images
-label_batch: tensor of groundtrue labels
-returns: List of (category_name, score) tuples per image (category_name: string of predicted category, score of prediction)'''
+arguments: model: resnet50 model, img_batch: tensor of preprocessed images
+returns: List of (category_name, score) tuples per image (category_name: string of predicted category, score: score of prediction)'''
 def make_batch_predictions(model, img_batch):
     weights = ResNet50_Weights.DEFAULT
     with torch.no_grad():
@@ -78,31 +47,13 @@ def make_batch_predictions(model, img_batch):
             results.append((category_name, class_id.item(), score.item()))
     return results
 
-''' function to compute the explanation for the predicted class
-arguments: img_tensor: already preprocessed images, target_layers: model layers to get explanation from
-targets: class targeted , model: resnet50 model, method: explanation method
-returns: grayscale_cam: explanation with highlighted pixels'''
-def calculate_explanation(img_tensor, target_layers, targets, model, method):
-    batch = img_tensor.unsqueeze(0)
-    # === Compute Grad-CAM ===
-        # Set aug_smooth=True and eigen_smooth=True for smoother maps (optional)
-    with method(model=model, target_layers=target_layers) as cam:
-        grayscale_cam = cam(input_tensor=batch,
-                            targets=targets,
-                            aug_smooth=True,
-                            eigen_smooth=True)
-
-        # In this example grayscale_cam has only one image in the batch:
-        grayscale_cam = grayscale_cam[0, :] # Get the CAM for the first (and only) image
-
-        return grayscale_cam
 
 ''' function to compute the explanation for the predicted classes
-arguments: img_tensor: already preprocessed images, target_layers: model layers to get explanation from
+arguments: img_tensor: tensor of already preprocessed images, target_layers: model layers to get explanation from
 targets: list of classes targeted , model: resnet50 model, method: explanation method
-returns: grayscale_cam: explanations with highlighted pixels'''
+returns: grayscale_cam: numpy array with pixel importances for each image in the batch'''
 def calculate_multiple_explanations(batch, target_layers, targets, model, method):
-    # === Compute Grad-CAM ===
+    # === Compute CAM method ===
         # Set aug_smooth=True and eigen_smooth=True for smoother maps (optional)
     with method(model=model, target_layers=target_layers) as cam:
         cam.batch_size = 32
@@ -187,21 +138,25 @@ def pixel_differrences_count(grayscale_cam_orig, grayscale_cam_adv):
     differences = np.abs(grayscale_cam_orig - grayscale_cam_adv)
     return np.count_nonzero(differences > 0.2)
 
-''' function to measure how the number of important pixels changes for the original and adversarial image based on a threshold'''
+''' function to measure how the number of important pixels changes for the original and adversarial image based on a threshold
+arguments: grayscale_cam_orig: pixel importances for original image, 
+grayscale_cam_adv: pixel importances for adversarial input
+threshold: pixel importance threshold to consider a pixel as activated
+returns: ratio of number of activated pixels in adversarial explanation to original explanation'''
 def pixel_activation_ratio(grayscale_cam_orig, grayscale_cam_adv, threshold=0):
     pixels_activated_orig = np.count_nonzero(grayscale_cam_orig > threshold)
     pixels_activated_adv = np.count_nonzero(grayscale_cam_adv > threshold)
     return pixels_activated_adv/pixels_activated_orig
 
 ''' function to count the number of regions (connected components) that are considered highly relevant 
-(pixel importance higher than 0.9)'''
+(pixel importance higher than 0.9)
+arguments: saliency_map: numpy array of pixel importances
+    threshold: pixel importance threshold to consider a pixel as highly relevant
+returns: number of connected components in the binary map of highly relevant pixels'''
 def count_attention_regions(saliency_map: np.ndarray, threshold: float = 0.9) -> int:
-    # Thresholding: keep only high-importance pixels
     binary_map = (saliency_map >= threshold).astype(np.uint8)
-
     # Label connected components (8-connectivity)
     labeled_map, num_regions = scipy.ndimage.label(binary_map, structure=np.ones((3, 3)))
-
     return num_regions
 
 ''' function to turn the saliency map into a probability distribution for calculation of Kullback-Leibler Divergence
@@ -211,7 +166,10 @@ def normalize_saliency_map(saliency_map: np.ndarray):
     saliency_map = saliency_map + 1e-10
     return saliency_map / np.sum(saliency_map)
 
-''' function to compute the Jenson-Shannon Divergence (symmetric distance for probability distributions)'''
+''' function to compute the Jenson-Shannon Divergence (symmetric distance for probability distributions)
+arguments: saliency1: numpy array of pixel importances for original image,
+           saliency2: numpy array of pixel importances for adversarial image
+returns: JS Divergence value'''
 def compute_js_divergence(saliency1: np.ndarray, saliency2: np.ndarray):
     saliency1_norm = normalize_saliency_map(saliency1)
     saliency2_norm = normalize_saliency_map(saliency2)
@@ -227,34 +185,35 @@ def compute_js_divergence(saliency1: np.ndarray, saliency2: np.ndarray):
     js_divergence = 0.5 * (kl_pm + kl_qm)
     return js_divergence
 
-''' function to compute the intersection over union for the saliency maps of original and adversarial image'''
+''' function to compute the intersection over union for the saliency maps of original and adversarial image
+arguments: saliency_map_orig: pixel importances of original image,
+           saliency_map_adv: pixel importances of adversarial
+           threshold_a: quantile threshold for original saliency map to consider pixel as relevant
+           threshold_b: quantile threshold for adversarial saliency map to consider pixel as relevant
+returns: IoU value'''
 def compute_iou(saliency_map_orig, saliency_map_adv, threshold_a=0.8, threshold_b=0.8):
     A_mask = saliency_map_orig > np.quantile(saliency_map_orig, threshold_a)
     B_mask = saliency_map_adv > np.quantile(saliency_map_adv, threshold_b)
 
-    # Calculate IoU
+    # calculate IoU
     intersection = np.logical_and(A_mask, B_mask).sum()
     union = np.logical_or(A_mask, B_mask).sum()
-
     return intersection / union if union > 0 else 0.0
 
+''' function to calculate Spearman's rank correlation coefficient between two saliency maps
+arguments: saliency_map_orig: pixel importances of original image,
+           saliency_map_adv: pixel importances of adversarial
+returns: Spearman's rank correlation coefficient'''
 def calculate_spearman_rank_correlation(saliency_map_orig, saliency_map_adv):
-
-    # 1. Flatten the maps
     original_flat = saliency_map_orig.flatten()
     adversarial_flat = saliency_map_adv.flatten()
-
-    # 2. Calculate Spearman's rank correlation
     correlation_coefficient, p_value = scipy.stats.spearmanr(original_flat, adversarial_flat)
-
-    print(f"Spearman's Rank Correlation Coefficient: {correlation_coefficient:.4f}")
-
     return correlation_coefficient
 
 ''' function to calculate metrics to compare the original saliency map and the one for the adversarial.
 arguments: grayscale_cam_orig: pixel importances of original image,
            grayscale_cam_adv: pixel importances of adversarial
-returns: mean of absolute pixel differences, percentage of pixels different according to threshold (0.2), cosine similarity, activation ratio'''
+returns: values of all relevant metrics'''
 def calculate_metrics(grayscale_cam_orig, grayscale_cam_adv):
     mean_pixel_diff = mean_pixel_difference(grayscale_cam_orig, grayscale_cam_adv)
     percent_different_pixels = pixel_differrences_count(grayscale_cam_orig, grayscale_cam_adv) / (grayscale_cam_orig.shape[0] * grayscale_cam_orig.shape[1]) * 100
@@ -280,7 +239,7 @@ def calculate_metrics(grayscale_cam_orig, grayscale_cam_adv):
 
     return mean_pixel_diff, percent_different_pixels, cosine_sim, activation_ratio, highly_relevant_ratio, js_div, num_regions_orig, num_regions_adv, intersection_over_union
 
-''' function to check if the model makes the correct classification and if it does creating adversarial image
+''' function to create adversarial images for a batch of images using the specified attack and epsilons
 arguments: batch of preprocessed images (Tensor of size [N, 3, 224, 224]), label (Tensor of size [N] containing the class_ids),
 attack: Class from foolbox.attacks, epsilons: numpy array of epsilons to try for that attack
 returns: selected_advs: adversarial images (Tensor of size [N, 3, 224, 224]) (None if no adversarial was produced)'''
@@ -307,8 +266,9 @@ def create_untargeted_adversarials(image_batch, label_batch, attack, epsilons):
 
 ''' function to run the explanation on the original image and compare the explanation for the adversarial with the original one
 saves generated plots (comparison of heatmaps) and stores metrics of comparison in csv file
-arguments: preprocessed images (Tensor of size [N, 3, 224, 224]), labels (Tensor of size [N] containing class_id),
-xAImethod: class from pytorch-gradcam, adversarials: Tensor of size [N, 3, 224, 224]'''
+arguments: model: resnet-50 model, images: preprocessed images (Tensor of size [N, 3, 224, 224]), labels: (Tensor of size [N] containing class_id),
+xAImethod: class from pytorch-gradcam, attack: class from foolbox.attacks, adversarials: Tensor of size [N, 3, 224, 224],
+csv_file: path to csv file to store metrics, ids: Tensor of size [N] containing image ids'''
 def create_and_compare_explanations(model, images, labels, xAImethod, attack, adversarials, csv_file, ids):
     predictions = make_batch_predictions(model, images)
     weights = ResNet50_Weights.DEFAULT
@@ -340,14 +300,10 @@ def create_and_compare_explanations(model, images, labels, xAImethod, attack, ad
         grayscale_cam_orig = grayscale_cams[i, :]
         grayscale_cam_adv = grayscale_cams[(i + number_of_images), :]
 
-        ### saving figure
         method_name = str(xAImethod).split(".")[-1].split("\'")[0]
         attack_name = str(attack).split("(")[0]
         class_name = weights.meta["categories"][labels[i]]
 
-        #fig_to_save = compare_visualizations(image_np, grayscale_cam_orig, orig_pred_str, adv_image_np, grayscale_cam_adv, adv_pred_str, method_name, attack_name)
-        #fig_to_save.savefig("results/images/" + method_name + "_" + attack_name + "_" + class_name + str(id) + ".png")
-        #plt.close(fig_to_save)
         images_similarity = torch.mean((image - adv_image)**2).item()
         print(f"Difference of images: {images_similarity}")
 
@@ -377,7 +333,8 @@ def create_and_compare_explanations(model, images, labels, xAImethod, attack, ad
 
 
 ''' function to load images from imagenet subset and preprocess them
-returns: tensor of images and tensor of labels (class_ids)'''
+arguments: preprocess: preprocessing function from torchvision models, dataset_url: string to specify dataset
+returns: tensor of preprocessed images and tensor of labels (class_ids)'''
 def load_and_transform_images(preprocess, dataset_url="ioxil/imagenetsubset"):
     images = []
     labels = []
@@ -398,7 +355,7 @@ def load_and_transform_images(preprocess, dataset_url="ioxil/imagenetsubset"):
 
     return torch.stack(images), torch.tensor(labels)
 
-
+'''function to create result folders if they do not exist yet'''
 def setup_result_folders():
     # Setup Folders
     results_folder = 'results'
@@ -408,6 +365,10 @@ def setup_result_folders():
     os.makedirs(targeted_folder, exist_ok=True)
     print(f"Results will be saved in: {results_folder}")
 
+'''function to filter out images that were not correctly classified by the model
+arguments: img_batch: tensor of preprocessed images, label_batch: tensor of class_ids,
+ids: tensor of image ids, predictions: list of (category_name, class_id, score) tuples
+returns: filtered img_batch, label_batch, ids'''
 def filter_wrong_classifications(img_batch, label_batch, ids, predictions):
     preds_class_id = torch.tensor([pred[1] for pred in predictions], device=label_batch.device)
     correct_mask = preds_class_id == label_batch
@@ -416,6 +377,10 @@ def filter_wrong_classifications(img_batch, label_batch, ids, predictions):
     ids = ids[correct_mask]
     return img_batch, label_batch, ids
     
+'''function to filter out images where no adversarial could be created
+arguments: img_batch: tensor of preprocessed images, label_batch: tensor of class_ids,
+ids: tensor of image ids, adversarials: list of adversarial images
+returns: filtered img_batch, label_batch, ids, adversarials'''
 def filter_adversarial_fails(img_batch, label_batch, ids, adversarials):
     valid_indices = [i for i, adv in enumerate(adversarials) if adv is not None]
     img_batch = img_batch[valid_indices]
@@ -428,6 +393,11 @@ def filter_adversarial_fails(img_batch, label_batch, ids, adversarials):
         adversarials = None
     return img_batch, label_batch, ids, adversarials
 
+''' function to process a batch in micro-batches to avoid memory issues with certain explanation methods
+arguments: model: resnet-50 model, batch_images: tensor of preprocessed images (Tensor of size [N, 3, 224, 224]), batch_labels: (Tensor of size [N] containing class_id),
+xAImethod: class from pytorch-gradcam, attack: class from foolbox.attacks, adv_images: Tensor of size [N, 3, 224, 224],
+csv_file: path to csv file to store metrics, batch_ids: Tensor of size [N] containing image ids,
+micro_batch_size: size of micro-batches to split the batch into, device: torch device (cpu or cuda)'''
 def create_explanations_micro_batch_wise(model, batch_images, batch_labels, xAImethod, attack, adv_images, csv_file, batch_ids, micro_batch_size, device):
     for start in range(0, batch_images.shape[0], micro_batch_size):
                             end = start + micro_batch_size
@@ -438,7 +408,6 @@ def create_explanations_micro_batch_wise(model, batch_images, batch_labels, xAIm
 
 
 if __name__ == '__main__':
-
     # Check if argument is provided
     if len(sys.argv) < 2:
         print("Error: Missing argument. Usage: python batch_wise_pipeline.py <index>")
@@ -473,39 +442,39 @@ if __name__ == '__main__':
 
                    
     attack_to_epsilon = [ 
-        # {fb_att.LinfFastGradientAttack(): np.linspace(0, 1, num=20)},
-        # {fb_att.LinfProjectedGradientDescentAttack(): np.linspace(0, 0.05, num=5)},
-        # {fb_att.L2FastGradientAttack(): np.linspace(1, 150, num=20)},
-        # {fb_att.L2ProjectedGradientDescentAttack(): np.linspace(0.5, 10, num=5)},
-        # {fb_att.LInfFMNAttack(): np.linspace(0, 0.5, num=20)},
-        # {fb_att.L2FMNAttack(): np.linspace(0, 10, num=20)},
+        {fb_att.LinfFastGradientAttack(): np.linspace(0, 1, num=20)},
+        {fb_att.LinfProjectedGradientDescentAttack(): np.linspace(0, 0.05, num=5)},
+        {fb_att.L2FastGradientAttack(): np.linspace(1, 150, num=20)},
+        {fb_att.L2ProjectedGradientDescentAttack(): np.linspace(0.5, 10, num=5)},
+        {fb_att.LInfFMNAttack(): np.linspace(0, 0.5, num=20)},
+        {fb_att.L2FMNAttack(): np.linspace(0, 10, num=20)},
         {fb_att.L1FMNAttack(): np.linspace(2, 150, num=20)},
         {fb_att.LinfinityBrendelBethgeAttack(steps=100): np.linspace(0, 0.5, num=10)},
-        # {fb_att.L2RepeatedAdditiveUniformNoiseAttack(): np.linspace(1, 250, num=25)},
-        # {fb_att.L2RepeatedAdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=25)},
+        {fb_att.L2RepeatedAdditiveUniformNoiseAttack(): np.linspace(1, 250, num=25)},
+        {fb_att.L2RepeatedAdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=25)},
         {fb_att.L2BrendelBethgeAttack(steps=100): np.linspace(0, 5, num=20)},
-        # {fb_att.LinearSearchBlendedUniformNoiseAttack(distance=LpDistance(100)): np.linspace(0, 20, num=20)},
-        # {fb_att.SaltAndPepperNoiseAttack(): np.linspace(1, 250, num=20)},
-        # {fb_att.LinfDeepFoolAttack(): np.linspace(0, 0.5, num=10)},
-        # {fb_att.L2DeepFoolAttack(): np.linspace(0, 10, num=20)},
-        # {fb_att.GaussianBlurAttack(distance=LpDistance(2)): np.linspace(1, 200, num=20)},
-        # {fb_att.L2ClippingAwareAdditiveUniformNoiseAttack(): np.linspace(1, 250, num=20)},
-        # {fb_att.LinfRepeatedAdditiveUniformNoiseAttack(): np.linspace(0.1, 3, num=20)},
-        # {fb_att.L2ClippingAwareRepeatedAdditiveUniformNoiseAttack(): np.linspace(1, 250, num=25)},
+        {fb_att.LinearSearchBlendedUniformNoiseAttack(distance=LpDistance(100)): np.linspace(0, 20, num=20)},
+        {fb_att.SaltAndPepperNoiseAttack(): np.linspace(1, 250, num=20)},
+        {fb_att.LinfDeepFoolAttack(): np.linspace(0, 0.5, num=10)},
+        {fb_att.L2DeepFoolAttack(): np.linspace(0, 10, num=20)},
+        {fb_att.GaussianBlurAttack(distance=LpDistance(2)): np.linspace(1, 200, num=20)},
+        {fb_att.L2ClippingAwareAdditiveUniformNoiseAttack(): np.linspace(1, 250, num=20)},
+        {fb_att.LinfRepeatedAdditiveUniformNoiseAttack(): np.linspace(0.1, 3, num=20)},
+        {fb_att.L2ClippingAwareRepeatedAdditiveUniformNoiseAttack(): np.linspace(1, 250, num=25)},
         {fb_att.L1BrendelBethgeAttack(steps=100): np.linspace(2, 100, num=10)},
-        # {fb_att.LinfBasicIterativeAttack(): np.linspace(0, 0.1, num=15)},
-        # {fb_att.BoundaryAttack(steps=10000): np.linspace(1, 150, num=10)},
-        # {fb_att.L2ClippingAwareRepeatedAdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=25)},
-        # {fb_att.LinfAdditiveUniformNoiseAttack(): np.linspace(0.1, 3, num=20)},
-        # {fb_att.L2ClippingAwareAdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=20)},
-        # {fb_att.L2AdditiveUniformNoiseAttack(): np.linspace(1, 250, num=20)},
-        # {fb_att.VirtualAdversarialAttack(steps=100): np.linspace(10, 150, num=50)},
-        # {fb_att.DDNAttack(): np.linspace(0, 10, num=20)},
+        {fb_att.LinfBasicIterativeAttack(): np.linspace(0, 0.1, num=15)},
+        {fb_att.BoundaryAttack(steps=10000): np.linspace(1, 150, num=10)},
+        {fb_att.L2ClippingAwareRepeatedAdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=25)},
+        {fb_att.LinfAdditiveUniformNoiseAttack(): np.linspace(0.1, 3, num=20)},
+        {fb_att.L2ClippingAwareAdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=20)},
+        {fb_att.L2AdditiveUniformNoiseAttack(): np.linspace(1, 250, num=20)},
+        {fb_att.VirtualAdversarialAttack(steps=100): np.linspace(10, 150, num=50)},
+        {fb_att.DDNAttack(): np.linspace(0, 10, num=20)},
         {fb_att.L2BasicIterativeAttack(): np.linspace(0, 15, num=30)},
         {fb_att.EADAttack(steps=4000): np.linspace(1, 200, num=15)},
-        # {fb_att.L2AdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=20)},
-        # {fb_att.NewtonFoolAttack(): np.linspace(0, 50, num=20)},
-        # {fb_att.L2CarliniWagnerAttack(steps=1000): np.linspace(0, 10, num=10)} 
+        {fb_att.L2AdditiveGaussianNoiseAttack(): np.linspace(1, 250, num=20)},
+        {fb_att.NewtonFoolAttack(): np.linspace(0, 50, num=20)},
+        {fb_att.L2CarliniWagnerAttack(steps=1000): np.linspace(0, 10, num=10)} 
         ]
 
     all_attacks = attack_to_epsilon[attack_group_index]
@@ -516,6 +485,7 @@ if __name__ == '__main__':
     explanation_methods = {"GradCAM": GradCAM,  "GradCAMPlusPlus": GradCAMPlusPlus, "EigenCAM": EigenCAM, 
                            "EigenGradCAM": EigenGradCAM, "LayerCAM": LayerCAM, "KPCA_CAM": KPCA_CAM, 
                            "AblationCAM": AblationCAM, "FullGrad": FullGrad, "ScoreCAM": ScoreCAM}
+    
     # give exact same saliency maps: [GradCAM, HiResCAM, XGradCAM], [LayerCAM, GradCAMElementwise]
 
     for attack, epsilons in all_attacks.items():

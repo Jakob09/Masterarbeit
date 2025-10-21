@@ -28,16 +28,6 @@ from skimage.metrics import structural_similarity
 from random import randrange
 from batch_wise_pipeline import calculate_metrics, calculate_spearman_rank_correlation
 
-'''
-tensor: Tensor of shape [C, H, W] normalized with given mean and std
-mean/std: sequences of 3 values for RGB channels
-'''
-def denormalize(tensor):
-    mean = [0.485, 0.456, 0.406]
-    std  = [0.229, 0.224, 0.225]
-    mean = torch.tensor(mean).view(-1, 1, 1)
-    std = torch.tensor(std).view(-1, 1, 1)
-    return tensor * std + mean
 
 '''
 image_np: NumPy array of shape (H, W, C), float32, normalized
@@ -52,15 +42,6 @@ def denormalize_np(image_np):
     std = np.array(std).reshape(1, 1, 3)
     return np.clip((image_np * std + mean), 0, 1)
 
-''' function to get the targets and target_layers needed for the gradCam explanation
-arguments: model: resnet50 model, prediction: string representation of predicted class
-returns: target_layers: model layers to get explanation from, targets: class targeted'''
-def get_targets(model, prediction):
-    weights = ResNet50_Weights.DEFAULT
-    class_id = weights.meta["categories"].index(prediction)
-    target_layers = [model.layer4[-1]]
-    targets = [ClassifierOutputTarget(class_id)]
-    return targets, target_layers
 
 ''' function to make a class prediction for a batch of already preprocessed images
 arguments: model: resnet50 model, 
@@ -79,31 +60,12 @@ def make_batch_predictions(model, img_batch):
             results.append((category_name, class_id.item(), score.item()))
     return results
 
-''' function to compute the explanation for the predicted class
-arguments: img_tensor: already preprocessed images, target_layers: model layers to get explanation from
-targets: class targeted , model: resnet50 model, method: explanation method
-returns: grayscale_cam: explanation with highlighted pixels'''
-def calculate_explanation(img_tensor, target_layers, targets, model, method):
-    batch = img_tensor.unsqueeze(0)
-    # === Compute Grad-CAM ===
-        # Set aug_smooth=True and eigen_smooth=True for smoother maps (optional)
-    with method(model=model, target_layers=target_layers) as cam:
-        grayscale_cam = cam(input_tensor=batch,
-                            targets=targets,
-                            aug_smooth=True,
-                            eigen_smooth=True)
-
-        # In this example grayscale_cam has only one image in the batch:
-        grayscale_cam = grayscale_cam[0, :] # Get the CAM for the first (and only) image
-
-        return grayscale_cam
-
 ''' function to compute the explanation for the predicted classes
 arguments: img_tensor: already preprocessed images, target_layers: model layers to get explanation from
 targets: list of classes targeted , model: resnet50 model, method: explanation method
 returns: grayscale_cam: explanations with highlighted pixels'''
 def calculate_multiple_explanations(batch, target_layers, targets, model, method):
-    # === Compute Grad-CAM ===
+    # === Compute CAM method ===
         # Set aug_smooth=True and eigen_smooth=True for smoother maps (optional)
     with method(model=model, target_layers=target_layers) as cam:
         cam.batch_size = 32

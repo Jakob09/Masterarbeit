@@ -1,7 +1,7 @@
 from batch_wise_pipeline import *
 
 
-''' function to check if the model makes the correct classification and if it does creating adversarial image
+''' function to create targeted adversarial images, using the lowest scoring class as target class.
 arguments: batch of preprocessed images (Tensor of size [N, 3, 224, 224]), label (Tensor of size [N] containing the class_ids),
 attack: Class from foolbox.attacks, epsilons: numpy array of epsilons to try for that attack
 returns: selected_advs: adversarial images (Tensor of size [N, 3, 224, 224]) (None if no adversarial was produced)'''
@@ -11,7 +11,6 @@ def create_targeted_adversarials(image_batch, label_batch, attack, epsilons):
             probs = torch.softmax(outputs, dim=1)
             lowest_scores, lowest_classes = probs.min(dim=1)
     print(lowest_classes)
-    #target_labels = (label_batch + 300) % 1000
     target_labels = lowest_classes
     criterion = fb.criteria.TargetedMisclassification(target_labels)
 
@@ -35,6 +34,7 @@ def create_targeted_adversarials(image_batch, label_batch, attack, epsilons):
     print(f"   GPU Mem In Adversarial Creation function: Alloc: {torch.cuda.memory_allocated(device)/(1024**2):.1f}MB, MaxAlloc: {torch.cuda.max_memory_allocated(device)/(1024**2):.1f}MB, Cached: {torch.cuda.memory_reserved(device)/(1024**2):.1f}MB")
 
     return selected_advs
+
 
 if __name__ == '__main__':
     
