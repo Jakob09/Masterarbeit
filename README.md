@@ -23,7 +23,7 @@ The project systematically generates adversarial examples using various methods,
 
 ## 2. Prerequisites
 
-You need **Python 3.x** and a working environment manager (like `conda` or `venv`) to run the experiments.
+You need **Python 3.13** and a working environment manager (like `conda` or `venv`) to run the experiments.
 
 ---
 
@@ -31,18 +31,30 @@ You need **Python 3.x** and a working environment manager (like `conda` or `venv
 
 ### 3.1. Environment Setup
 
-The necessary dependencies are listed in the `requirements.txt` file. You can set up the environment and install all packages using the following commands:
+The necessary dependencies are listed in the `requirements.txt` file. 
 
-Using `pip` and `venv`:
-```bash
-# Create a virtual environment
-python -m venv venv
-# Activate the environment
-source venv/bin/activate  # On Linux/macOS
-# venv\Scripts\activate  # On Windows
 
-# Install dependencies
-pip install -r requirements.txt
+If you use Conda, you can set up the required environment using the following commands:
+
+1.  **Create a Conda environment** 
+    ```bash
+    conda create -n adv_saliency python=3.13
+    ```
+
+2.  **Activate the environment:**
+    ```bash
+    conda activate adv_saliency
+    ```
+
+3.  **Install dependencies** using the provided `requirements.txt` file:
+    ```bash
+    pip install -r requirements.txt
+    ```
+    
+4.  **Deactivate the environment** when finished:
+    ```bash
+    conda deactivate
+    ```
 
 
 ## 4. Data
