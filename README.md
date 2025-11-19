@@ -54,25 +54,25 @@ If you use Conda, you can set up the required environment using the following co
 
 
 ## 4. Usage
-
-1. Pipeline Execution
+---
+### 1. Pipeline Execution
 The core logic is divided into two Python scripts handling the adversarial generation and metric calculation. The results are stored in CSV files.
 
-1.1. Untargeted Attacks
+#### 1.1. Untargeted Attacks
 The batch_wise_pipeline.py script generates untargeted adversarial examples for various attacks available in the Foolbox library. It computes saliency maps and comparison metrics for each image. The script takes a command-line argument indicating the index of the attack-group to use (all attacks are given in a list of dictionaries, containing the foolbox attack and the epsilon values to use for the adversarial attack).
 
-1.2. Targeted Attacks
+#### 1.2. Targeted Attacks
 The targeted_batch_wise_pipeline.py script generates targeted adversarial examples for various attacks available in the Foolbox library. It computes saliency maps and comparison metrics for each image. The script takes a command-line argument indicating the index of the attack-group to use (all attacks are given in a list of dictionaries, containing the foolbox attack and the epsilon values to use for the adversarial attack).
 
-2. Metric Analysis
+### 2. Metric Analysis
 The analysis of the calculated metrics is executed in various jupyter notebooks ranging from EDA to clustering of the methods/attacks.
 
-3. Modifications
+### 3. Modifications
 
-3.1. Other datasets
+#### 3.1. Other datasets
 Different datasets can be used by editing the load_and_transform_images() function in the batch_wise_pipeline.py. The function should return a tensor of preprocessed images and a tensor of labels (class_ids)
 
-3.2. Other models
+#### 3.2. Other models
 Other models can be used by modifying the following code (using a pytorch model)
 
 ```python
